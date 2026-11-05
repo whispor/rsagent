@@ -1,0 +1,5 @@
+/target
+
+# Local secrets and session files — never commit these.
+.env
+*.session.json

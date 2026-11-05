@@ -1,0 +1,14 @@
+# Clippy configuration adapted from the BeautifulRust project.
+# Pairs with the `[workspace.lints]` block in Cargo.toml.
+
+# Flag any function with a bool parameter, not just functions with four or more.
+max-fn-params-bools = 0
+
+# Allow unwrap, expect, and printing in tests, where a panic is the assertion.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+
+# Words that read as code but are proper nouns in this crate's docs.
+# `..` keeps clippy's built-in list.
+doc-valid-idents = ["OpenAI", "OpenRouter", "DeepSeek", "Groq", "vLLM", "Ollama", ".."]

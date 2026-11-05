@@ -1,0 +1,21 @@
+[package]
+name = "rsagent-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stateful agent with tool execution and event streaming, modelled after pi-agent-core"
+
+[dependencies]
+rsagent-ai.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+async-trait.workspace = true
+
+[lints]
+workspace = true

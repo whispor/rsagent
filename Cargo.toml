@@ -1,0 +1,90 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rsagent-ai",
+    "crates/rsagent-agent",
+    "crates/rsagent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+rsagent-ai = { path = "crates/rsagent-ai" }
+rsagent-agent = { path = "crates/rsagent-agent" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "fs",
+    "process",
+    "io-util",
+    "io-std",
+    "signal",
+] }
+futures = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+thiserror = "2"
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+
+# Lint policy adapted from the BeautifulRust project's drop-in `lints.toml`.
+# Members opt in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+unwrap_used = "warn"
+expect_used = "allow"
+panic_in_result_fn = "warn"
+missing_panics_doc = "warn"
+missing_errors_doc = "warn"
+
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+
+fn_params_excessive_bools = "warn"
+struct_excessive_bools = "warn"
+clone_on_ref_ptr = "warn"
+redundant_clone = "warn"
+rc_buffer = "warn"
+
+string_add = "warn"
+wildcard_imports = "warn"
+
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+as_conversions = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+module_inception = "allow"
+enum_glob_use = "allow"
