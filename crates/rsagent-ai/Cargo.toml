@@ -3,6 +3,7 @@ name = "rsagent-ai"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Unified multi-provider LLM API with streaming events, modelled after pi-ai"
 
 [dependencies]

@@ -29,6 +29,8 @@ use crate::tool::{Tool, ToolContext};
 ///   declares itself sequential;
 /// * [`steer`](Agent::steer) injects messages mid-run, [`follow_up`](Agent::follow_up)
 ///   queues work for after the agent would otherwise stop;
+/// * before each request the transcript is trimmed by whole turns if it would exceed
+///   the model's context window, keeping the first and most recent turns;
 /// * [`abort`](Agent::abort) cancels the current run.
 pub struct Agent {
     models: Models,
@@ -168,6 +170,14 @@ impl Agent {
         self.messages = messages;
     }
 
+    /// Replace the system prompt used for subsequent turns.
+    ///
+    /// Used when resuming a persisted session, where the saved prompt should win over
+    /// the CLI default.
+    pub fn set_system_prompt(&mut self, system_prompt: impl Into<String>) {
+        self.system_prompt = system_prompt.into();
+    }
+
     /// Snapshot the transcript and system prompt as a serializable [`Context`].
     pub fn transcript(&self) -> Context {
         Context {
@@ -276,6 +286,7 @@ impl Agent {
                 return Ok(());
             }
             self.inject_steering();
+            self.compact_context();
 
             self.emit(&AgentEvent::TurnStart);
 
@@ -285,18 +296,25 @@ impl Agent {
                 StreamOutcome::NoResult => return Err(AgentError::NoResult),
             };
 
-            let assistant_message = Message::Assistant(assistant.clone());
+            // Read everything needed off the assistant before moving it into the message,
+            // so the message is built without an extra deep clone.
+            let stop_reason = assistant.stop_reason;
+            let error_message = assistant.error_message.clone();
+            let calls: Vec<(String, String, Value)> = assistant
+                .tool_calls()
+                .into_iter()
+                .map(|(id, name, args)| (id.to_string(), name.to_string(), args.clone()))
+                .collect();
+
+            let assistant_message = Message::Assistant(assistant);
             self.messages.push(assistant_message.clone());
             self.emit(&AgentEvent::MessageEnd {
                 message: assistant_message.clone(),
             });
 
             // A hard error or abort ends the run.
-            if matches!(
-                assistant.stop_reason,
-                StopReason::Error | StopReason::Aborted
-            ) {
-                self.last_error.clone_from(&assistant.error_message);
+            if matches!(stop_reason, StopReason::Error | StopReason::Aborted) {
+                self.last_error = error_message;
                 self.emit(&AgentEvent::TurnEnd {
                     message: assistant_message,
                     tool_results: Vec::new(),
@@ -304,13 +322,7 @@ impl Agent {
                 return Ok(());
             }
 
-            let tool_calls = assistant.tool_calls();
-            if assistant.stop_reason == StopReason::ToolUse && !tool_calls.is_empty() {
-                let calls: Vec<(String, String, Value)> = tool_calls
-                    .into_iter()
-                    .map(|(id, name, args)| (id.to_string(), name.to_string(), args.clone()))
-                    .collect();
-
+            if stop_reason == StopReason::ToolUse && !calls.is_empty() {
                 let (tool_results, all_terminate) = self.run_tool_calls(calls).await;
 
                 self.emit(&AgentEvent::TurnEnd {
@@ -594,6 +606,64 @@ impl Agent {
         true
     }
 
+    /// Drop the oldest whole turns so the next request fits the model's context window.
+    ///
+    /// The first turn and the most recent turn are always kept — the original task and
+    /// the latest exchange survive — while older middle turns are dropped oldest-first.
+    /// Turns are dropped whole so a tool call is never separated from its result.
+    /// Returns how many messages were dropped.
+    fn compact_context(&mut self) -> usize {
+        let budget = self.context_budget();
+        if budget == u64::MAX {
+            return 0;
+        }
+        let ranges = turn_ranges(&self.messages);
+        if ranges.len() < 2 {
+            return 0;
+        }
+
+        let mut total = estimate_tokens(&self.system_prompt, &self.messages);
+        if total <= budget {
+            return 0;
+        }
+
+        let mut keep = vec![true; ranges.len()];
+        let last = ranges.len() - 1;
+        let mut index = 1;
+        while total > budget && index < last {
+            let (start, end) = ranges[index];
+            total = total.saturating_sub(estimate_tokens("", &self.messages[start..end]));
+            keep[index] = false;
+            index += 1;
+        }
+
+        let mut rebuilt = Vec::with_capacity(self.messages.len());
+        for (idx, (start, end)) in ranges.iter().enumerate() {
+            if keep[idx] {
+                rebuilt.extend_from_slice(&self.messages[*start..*end]);
+            }
+        }
+
+        let dropped = self.messages.len() - rebuilt.len();
+        if dropped == 0 {
+            return 0;
+        }
+        self.messages = rebuilt;
+        self.emit(&AgentEvent::ContextCompacted {
+            dropped_messages: dropped,
+        });
+        dropped
+    }
+
+    /// The token budget for one request: three quarters of the model's context window,
+    /// leaving room for the response. `u64::MAX` when the window is unknown.
+    fn context_budget(&self) -> u64 {
+        if self.model.context_window == 0 {
+            return u64::MAX;
+        }
+        self.model.context_window / 4 * 3
+    }
+
     fn tool_label(&self, name: &str) -> String {
         self.tools
             .iter()
@@ -708,4 +778,37 @@ fn truncate_result(result: &mut ToolResultMessage) {
     result.content = vec![ContentBlock::text(format!(
         "{kept}\n\n… [truncated: showing {MAX_TOOL_RESULT_CHARS} of {total} characters]"
     ))];
+}
+
+/// Split the transcript into turn ranges, each starting at a user message.
+///
+/// A turn spans from a user message up to (but not including) the next one, so tool
+/// calls and their results always live inside the same range and are dropped together.
+fn turn_ranges(messages: &[Message]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for (index, message) in messages.iter().enumerate() {
+        if index > 0 && matches!(message, Message::User(_)) {
+            ranges.push((start, index));
+            start = index;
+        }
+    }
+    if start < messages.len() {
+        ranges.push((start, messages.len()));
+    }
+    ranges
+}
+
+/// A rough token estimate for a transcript slice plus an optional prefix.
+///
+/// Four characters per token is close enough for a trimming decision and needs no
+/// tokenizer dependency.
+fn estimate_tokens(prefix: &str, messages: &[Message]) -> u64 {
+    let chars: usize = prefix.chars().count() + messages.iter().map(message_chars).sum::<usize>();
+    u64::try_from(chars / 4).unwrap_or(u64::MAX)
+}
+
+/// The serialized size of one message, in characters.
+fn message_chars(message: &Message) -> usize {
+    serde_json::to_string(message).map_or(0, |json| json.chars().count())
 }

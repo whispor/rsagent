@@ -3,6 +3,7 @@ name = "rsagent-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Stateful agent with tool execution and event streaming, modelled after pi-agent-core"
 
 [dependencies]

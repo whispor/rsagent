@@ -8,6 +8,7 @@ pub mod approval;
 pub mod cancel;
 pub mod error;
 pub mod event;
+mod glob;
 pub mod tool;
 pub mod tools;
 
@@ -18,5 +19,6 @@ pub use error::AgentError;
 pub use event::AgentEvent;
 pub use tool::{Tool, ToolContext, ToolResult};
 pub use tools::{
-    builtin_tools, BashTool, EditFileTool, ListDirTool, ReadFileTool, SearchTool, WriteFileTool,
+    builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool, ReadFileTool, SearchTool,
+    WriteFileTool,
 };

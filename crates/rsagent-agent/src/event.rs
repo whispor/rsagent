@@ -83,6 +83,12 @@ pub enum AgentEvent {
         /// Tool-result messages produced during the turn.
         tool_results: Vec<Message>,
     },
+    /// Older messages were dropped to keep the next request inside the model's
+    /// context window.
+    ContextCompacted {
+        /// How many messages were dropped.
+        dropped_messages: usize,
+    },
     /// The final event of a run.
     AgentEnd {
         /// The full transcript at the end of the run.

@@ -1,5 +1,7 @@
 # rsagent
 
+[![CI](https://github.com/whispor/rsagent/actions/workflows/ci.yml/badge.svg)](https://github.com/whispor/rsagent/actions/workflows/ci.yml)
+
 A minimal Rust coding agent: an LLM turn loop that can read, write, and edit files
 and run shell commands, exposed through a small terminal CLI.
 
@@ -91,6 +93,7 @@ cargo run -p rsagent -- --model gpt-4o-mini
 | `--system <PROMPT>` | | Override the system prompt. |
 | `-y, --yes` | | Auto-approve every tool call. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
+| `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools
 
@@ -98,10 +101,15 @@ cargo run -p rsagent -- --model gpt-4o-mini
 | --- | --- | --- |
 | `read_file` | no | Read a file as UTF-8 text. |
 | `list_dir` | no | List directory entries. |
-| `search` | no | Search files under a directory for a literal substring. |
+| `search` | no | Search files under a directory for a literal substring (`path:line: text`). |
+| `glob` | no | Find files by glob pattern (`*`, `?`, `**`), one path per line. |
 | `write_file` | yes | Write a file, creating parent directories. |
 | `edit_file` | yes | Replace an exact string in a file. |
 | `bash` | yes | Run a shell command (killed after a timeout). |
+
+`search` and `glob` do not descend into build-output or vendor directories (`target`,
+`node_modules`, `.git`, `.venv`, `venv`, `__pycache__`), so matches are not buried
+under generated files. The directory you point them at is still searched.
 
 Tools marked **yes** require approval before they run. In interactive mode the agent
 explains, in plain language, exactly what it is about to do and waits for your answer:
@@ -142,6 +150,9 @@ rsagent --session work.json --print "read Cargo.toml"
 rsagent --session work.json --print "now summarize what you read"
 ```
 
+On resume the saved system prompt is restored, unless `--system` is passed to override
+it.
+
 ## Configuration
 
 Environment variables are read from the process environment. A `.env` file in the
@@ -156,6 +167,11 @@ environment variables win).
 - Requests that fail before the stream starts are retried with exponential backoff
   (transient HTTP statuses and connection errors); a failure mid-stream is surfaced
   as an error event rather than retried.
+- Before each request the transcript is trimmed by whole turns if it would exceed the
+  model's context window (roughly three quarters of it is used, leaving room for the
+  response). The first and most recent turns are always kept, so a tool call is never
+  separated from its result; a `ContextCompacted` event reports how many messages were
+  dropped.
 - The `bash` tool is not sandboxed; approval prompts are the only guardrail.
 
 ## License

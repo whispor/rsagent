@@ -48,10 +48,10 @@ Use the provided tools to read and modify files and to run commands.
 Prefer small, focused changes. Explain briefly what you did.";
 
 #[derive(Parser, Debug)]
-#[command(name = "rsagent", about = "A minimal Rust coding agent")]
+#[command(name = "rsagent", version, about = "A minimal Rust coding agent")]
 struct Cli {
     /// Model id to use (default: gpt-4o-mini).
-    #[arg(short, long, env = "RSAGENT_MODEL")]
+    #[arg(short, long, env = "RSAGENT_MODEL", hide_env_values = true)]
     model: Option<String>,
 
     /// Run a single prompt and exit.
@@ -59,11 +59,11 @@ struct Cli {
     print: Option<String>,
 
     /// Base URL of an OpenAI-compatible endpoint.
-    #[arg(long, env = "RSAGENT_BASE_URL")]
+    #[arg(long, env = "RSAGENT_BASE_URL", hide_env_values = true)]
     base_url: Option<String>,
 
     /// API key; overrides the provider's environment resolution.
-    #[arg(long, env = "RSAGENT_API_KEY")]
+    #[arg(long, env = "RSAGENT_API_KEY", hide_env_values = true)]
     api_key: Option<String>,
 
     /// Use an offline, scripted provider (no network, no API key).
@@ -110,6 +110,12 @@ async fn main() -> anyhow::Result<()> {
             Ok(Some(context)) => {
                 let count = context.messages.len();
                 agent.load_messages(context.messages);
+                // The saved system prompt wins unless the user passed `--system`.
+                if cli.system.is_none() {
+                    if let Some(prompt) = context.system_prompt {
+                        agent.set_system_prompt(prompt);
+                    }
+                }
                 eprintln!(
                     "\x1b[2m· resumed {} message(s) from {}\x1b[0m",
                     count,
@@ -515,6 +521,10 @@ impl Renderer {
                     tool_display_name(tool_name),
                     truncate(content, 200)
                 );
+            }
+            AgentEvent::ContextCompacted { dropped_messages } => {
+                self.flush_line();
+                eprintln!("\x1b[2m· 上下文接近上限，已裁剪较早的 {dropped_messages} 条消息\x1b[0m");
             }
             _ => {}
         }

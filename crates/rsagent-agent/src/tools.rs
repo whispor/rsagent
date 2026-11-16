@@ -1,5 +1,6 @@
 //! Built-in tools: the filesystem and shell primitives a coding agent needs.
 
+use std::ffi::OsStr;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -10,7 +11,27 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::glob::glob_match;
 use crate::tool::{Tool, ToolContext, ToolResult};
+
+/// Directory names that recursive tools never descend into.
+///
+/// These hold build output or vendored dependencies; searching them buries the real
+/// matches under noise (a single `target/` can dwarf an entire source tree). The
+/// directory the user explicitly points at is still searched.
+const SKIPPED_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+
+fn is_skipped_dir(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| SKIPPED_DIRS.contains(&name))
+}
 
 fn object_schema(properties: &Value, required: &[&str]) -> Value {
     json!({
@@ -255,7 +276,8 @@ impl Tool for ListDirTool {
 /// Search for a literal substring across files under a directory.
 ///
 /// Read-only: it never mutates the filesystem, so it needs no approval. Matching lines
-/// are reported as `path:line: text`, mirroring `grep -rn`.
+/// are reported as `path:line: text`, mirroring `grep -rn`. Build-output and vendor
+/// directories ([`SKIPPED_DIRS`]) are not descended into.
 #[derive(Debug)]
 pub struct SearchTool;
 
@@ -264,7 +286,7 @@ impl Tool for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "search",
-            "Search for a literal substring in files under a directory, reporting matching lines as `path:line: text`. Read-only.",
+            "Search for a literal substring in files under a directory, reporting matching lines as `path:line: text`. Skips build and vendor directories (target, node_modules, .git, ...). Read-only.",
             object_schema(
                 &json!({
                     "pattern": { "type": "string", "description": "Literal text to search for" },
@@ -317,7 +339,9 @@ impl Tool for SearchTool {
                 let file_type = entry.file_type().await.ok();
                 let entry_path = entry.path();
                 if matches!(file_type.as_ref(), Some(t) if t.is_dir()) {
-                    stack.push(entry_path);
+                    if !is_skipped_dir(&entry.file_name()) {
+                        stack.push(entry_path);
+                    }
                 } else if matches!(file_type.as_ref(), Some(t) if t.is_file()) {
                     // Skip unreadable or non-UTF-8 files rather than failing the search.
                     let Ok(text) = tokio::fs::read_to_string(&entry_path).await else {
@@ -346,6 +370,100 @@ impl Tool for SearchTool {
                 root.display()
             )));
         }
+        Ok(ToolResult::text(matches.join("\n")))
+    }
+}
+
+/// Find files whose path matches a glob pattern.
+///
+/// Read-only, so it needs no approval. The syntax is small on purpose: `*` (within a
+/// segment), `?` (one character), and `**` (any number of segments, e.g. `**/*.rs`).
+/// A pattern without a `/` matches file names anywhere in the tree. Build-output and
+/// vendor directories ([`SKIPPED_DIRS`]) are not descended into.
+#[derive(Debug)]
+pub struct GlobTool;
+
+#[async_trait]
+impl Tool for GlobTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "glob",
+            "Find files whose path matches a glob pattern, one path per line. Supports `*` (within a segment), `?` (one character), and `**` (any number of segments, e.g. `**/*.rs`). A pattern without a `/` matches file names. Read-only.",
+            object_schema(
+                &json!({
+                    "pattern": { "type": "string", "description": "Glob pattern, e.g. `**/*.rs`" },
+                    "path": { "type": "string", "description": "Directory to search (default \".\")" },
+                    "max_results": { "type": "integer", "description": "Stop after this many matches (default 100)" },
+                }),
+                &["pattern"],
+            ),
+        )
+    }
+
+    fn label(&self) -> String {
+        "Glob".to_string()
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        args: Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        let pattern = required_str(&args, "pattern")?;
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(".")
+            .to_string();
+        let max_results = usize::try_from(
+            args.get("max_results")
+                .and_then(Value::as_u64)
+                .unwrap_or(100),
+        )
+        .unwrap_or(100);
+        let root = context.resolve(&path);
+
+        // Same explicit-stack walk as `search`: no async recursion, and it stops the
+        // moment enough matches are found.
+        let mut stack = vec![root.clone()];
+        let mut matches: Vec<String> = Vec::new();
+
+        'walk: while let Some(dir) = stack.pop() {
+            let mut entries = tokio::fs::read_dir(&dir)
+                .await
+                .map_err(|error| format!("failed to read {}: {error}", dir.display()))?;
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|error| format!("failed to read entry: {error}"))?
+            {
+                let file_type = entry.file_type().await.ok();
+                let entry_path = entry.path();
+                if matches!(file_type.as_ref(), Some(t) if t.is_dir()) {
+                    if !is_skipped_dir(&entry.file_name()) {
+                        stack.push(entry_path);
+                    }
+                } else if matches!(file_type.as_ref(), Some(t) if t.is_file()) {
+                    let relative = entry_path.strip_prefix(&root).unwrap_or(&entry_path);
+                    let candidate = relative.to_string_lossy().replace('\\', "/");
+                    if glob_match(&pattern, &candidate) {
+                        matches.push(entry_path.display().to_string());
+                        if matches.len() >= max_results {
+                            break 'walk;
+                        }
+                    }
+                }
+            }
+        }
+
+        if matches.is_empty() {
+            return Ok(ToolResult::text(format!(
+                "No files match `{pattern}` under {}",
+                root.display()
+            )));
+        }
+        matches.sort();
         Ok(ToolResult::text(matches.join("\n")))
     }
 }
@@ -550,6 +668,7 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(EditFileTool),
         Box::new(ListDirTool),
         Box::new(SearchTool),
+        Box::new(GlobTool),
         Box::new(BashTool::new()),
     ]
 }
