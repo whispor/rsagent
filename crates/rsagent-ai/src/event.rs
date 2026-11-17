@@ -3,11 +3,14 @@
 //! Successful generation follows `Start → updates* → Done`. A failure after generation
 //! starts follows `Start → updates* → Error`. Setup failures may emit `Error` alone.
 
+use serde::Serialize;
+
 use crate::message::{AssistantMessage, ContentBlock};
 use crate::types::StopReason;
 
 /// Distinguishes a genuine error from a caller-initiated abort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ErrorReason {
     /// A real failure (network, protocol, or provider error).
@@ -20,7 +23,16 @@ pub enum ErrorReason {
 ///
 /// Blocks are addressed by `content_index`; a block's `*_start`/`*_delta`/`*_end`
 /// sequence is not guaranteed to be contiguous across different blocks.
-#[derive(Debug, Clone)]
+///
+/// Serialized as an internally tagged object (`{"type": "textDelta", ...}`), the same
+/// shape used for [`crate::ContentBlock`] and [`crate::Message`], so one JSON-lines
+/// stream can carry every layer of the event hierarchy.
+#[derive(Debug, Clone, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[non_exhaustive]
 pub enum StreamEvent {
     /// Stream begins; carries the initial (empty) assistant message structure.

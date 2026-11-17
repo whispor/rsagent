@@ -4,10 +4,20 @@
 //! reason about: `AgentStart → (TurnStart → messages/tools → TurnEnd)+ → AgentEnd`.
 
 use rsagent_ai::{Message, StreamEvent};
+use serde::Serialize;
 use serde_json::Value;
 
 /// An event emitted by the agent loop.
-#[derive(Debug, Clone)]
+///
+/// Serialized as an internally tagged object (`{"type": "turnEnd", ...}`), the same
+/// shape as the messages and stream events it carries, so `--json` can emit the whole
+/// event stream as one JSON object per line.
+#[derive(Debug, Clone, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[non_exhaustive]
 pub enum AgentEvent {
     /// The run begins.
