@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一次工具调用的完整旅程 · The Life of a Tool Call — rsagent</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --bg-grad: radial-gradient(1200px 600px at 15% -10%, #e8ecff 0%, transparent 60%),
+               radial-gradient(900px 500px at 100% 0%, #e6fbf3 0%, transparent 55%);
+    --panel: #ffffff;
+    --panel-2: #fbfcfe;
+    --ink: #171a21;
+    --ink-2: #40485a;
+    --muted: #5c6478;
+    --line: #e4e7ee;
+    --line-2: #eef0f5;
+    --code-bg: #f2f4f8;
+    --code-ink: #2b3242;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.14);
+
+    --cli:   #6366f1;
+    --agent: #0ea5e9;
+    --ai:    #f59e0b;
+    --tool:  #10b981;
+    --warn:  #ef4444;
+    --cli-ink:   #4338ca;
+    --agent-ink: #0369a1;
+    --ai-ink:    #b45309;
+    --tool-ink:  #047857;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1117;
+      --bg-grad: radial-gradient(1200px 600px at 15% -10%, #1a2050 0%, transparent 60%),
+                 radial-gradient(900px 500px at 100% 0%, #07332a 0%, transparent 55%);
+      --panel: #161a22;
+      --panel-2: #12161d;
+      --ink: #e7eaf0;
+      --ink-2: #c2c9d6;
+      --muted: #8b95a8;
+      --line: #242a35;
+      --line-2: #1d222c;
+      --code-bg: #10141b;
+      --code-ink: #cdd5e4;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+      --cli:   #818cf8;
+      --agent: #38bdf8;
+      --ai:    #fbbf24;
+      --tool:  #34d399;
+      --warn:  #f87171;
+      --cli-ink:   #a5b4fc;
+      --agent-ink: #7dd3fc;
+      --ai-ink:    #fcd34d;
+      --tool-ink:  #6ee7b7;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image: var(--bg-grad);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                 "Liberation Mono", monospace;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 44px 22px 80px; }
+
+  /* ---------- header ---------- */
+  header.hero { margin-bottom: 30px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 650; margin-bottom: 14px;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--agent); }
+  h1 {
+    margin: 0 0 6px; font-size: clamp(26px, 4.4vw, 40px); line-height: 1.18;
+    letter-spacing: -0.022em; font-weight: 760;
+  }
+  h1 .en { display: block; font-size: .52em; font-weight: 600; color: var(--muted);
+           letter-spacing: -0.01em; margin-top: 8px; }
+  .lede { margin: 16px 0 0; max-width: 74ch; color: var(--ink-2); font-size: 15.5px; }
+  .lede code { background: var(--code-bg); color: var(--code-ink); padding: 1px 6px;
+               border-radius: 5px; font-size: .88em; }
+
+  /* ---------- stack diagram ---------- */
+  .stackcard {
+    margin: 26px 0 34px; padding: 20px 22px; border: 1px solid var(--line);
+    border-radius: 16px; background: var(--panel); box-shadow: var(--shadow);
+  }
+  .stackcard .cap { font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+  svg.stack { width: 100%; height: auto; display: block; }
+
+  /* ---------- layout ---------- */
+  .cols { display: grid; grid-template-columns: minmax(0,1.62fr) minmax(0,1fr); gap: 30px; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+
+  h2.section {
+    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 0 0 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2.section::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  /* ---------- timeline ---------- */
+  ol.timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+  ol.timeline::before {
+    content: ""; position: absolute; left: 15px; top: 10px; bottom: 10px;
+    width: 2px; background: linear-gradient(var(--line), var(--line-2));
+  }
+  .step { position: relative; padding: 0 0 20px 46px; }
+  .step .bullet {
+    position: absolute; left: 6px; top: 3px; width: 20px; height: 20px;
+    border-radius: 50%; background: var(--panel); border: 2px solid var(--line);
+    display: grid; place-items: center; font-size: 10.5px; font-weight: 700;
+    color: var(--muted); z-index: 1;
+  }
+  .card {
+    border: 1px solid var(--line); border-radius: 13px; background: var(--panel);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .card .head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 11px 14px; border-bottom: 1px solid var(--line-2); background: var(--panel-2);
+  }
+  .card .head .title { font-weight: 680; font-size: 14.5px; letter-spacing: -0.008em; }
+  .badge {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2.5px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .b-cli   { color: var(--cli-ink);   background: color-mix(in srgb, var(--cli)   15%, var(--panel)); border-color: color-mix(in srgb, var(--cli)   40%, var(--panel)); }
+  .b-agent { color: var(--agent-ink); background: color-mix(in srgb, var(--agent) 15%, var(--panel)); border-color: color-mix(in srgb, var(--agent) 40%, var(--panel)); }
+  .b-ai    { color: var(--ai-ink);    background: color-mix(in srgb, var(--ai)    18%, var(--panel)); border-color: color-mix(in srgb, var(--ai)    45%, var(--panel)); }
+  .b-tool  { color: var(--tool-ink);  background: color-mix(in srgb, var(--tool)  15%, var(--panel)); border-color: color-mix(in srgb, var(--tool)  40%, var(--panel)); }
+  .card .body { padding: 13px 15px 15px; }
+  .card .body p { margin: 0 0 10px; color: var(--ink-2); font-size: 14px; }
+  .card .body p:last-child { margin-bottom: 0; }
+  .card .body code {
+    background: var(--code-bg); color: var(--code-ink); padding: 1.5px 6px;
+    border-radius: 5px; font-size: .87em; white-space: nowrap;
+  }
+  .fn { color: var(--ink); font-weight: 600; }
+
+  .events { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .events .lbl { font-size: 11px; color: var(--muted); font-weight: 650;
+                 letter-spacing: .05em; text-transform: uppercase; margin-right: 2px; }
+  .chip {
+    font-size: 11.5px; padding: 2.5px 8px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--ink-2); white-space: nowrap;
+  }
+  .chip.hot { border-color: color-mix(in srgb, var(--agent) 45%, var(--line));
+              color: var(--agent-ink); font-weight: 650; }
+
+  .callout {
+    margin-top: 11px; padding: 9px 12px; border-radius: 9px; font-size: 13px;
+    border-left: 3px solid var(--ai); background: color-mix(in srgb, var(--ai) 8%, var(--panel));
+    color: var(--ink-2);
+  }
+  .callout.warn { border-left-color: var(--warn);
+                  background: color-mix(in srgb, var(--warn) 8%, var(--panel)); }
+
+  /* ---------- sidebar ---------- */
+  .side { display: flex; flex-direction: column; gap: 18px; position: sticky; top: 24px; }
+  @media (max-width: 900px) { .side { position: static; } }
+  .panel {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+    box-shadow: var(--shadow); padding: 16px 17px;
+  }
+  .panel h3 {
+    margin: 0 0 12px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700;
+  }
+  .chan { display: grid; gap: 12px; }
+  .chan .row { border: 1px solid var(--line-2); border-radius: 10px; padding: 11px 12px;
+               background: var(--panel-2); }
+  .chan .row .k { font-weight: 680; font-size: 13.5px; display: flex;
+                  align-items: center; gap: 7px; margin-bottom: 4px; }
+  .chan .row .k .pip { width: 8px; height: 8px; border-radius: 3px; }
+  .chan .row .v { font-size: 13px; color: var(--muted); }
+  .chan .row .v code { background: var(--code-bg); color: var(--code-ink);
+                       padding: 1px 5px; border-radius: 4px; font-size: .86em; }
+
+  ul.vocab { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  ul.vocab li { display: flex; justify-content: space-between; gap: 10px;
+                padding: 5px 0; border-bottom: 1px dashed var(--line-2); }
+  ul.vocab li:last-child { border-bottom: 0; }
+  ul.vocab .e { color: var(--ink-2); }
+  ul.vocab .w { color: var(--muted); text-align: right; }
+
+  ul.src { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  ul.src li { padding: 5px 0; color: var(--muted); display: flex; gap: 8px; }
+  ul.src li::before { content: "›"; color: var(--ai); font-weight: 700; }
+  ul.src code { color: var(--ink-2); }
+
+  /* ---------- terminal ---------- */
+  .term {
+    margin-top: 34px; border: 1px solid var(--line); border-radius: 14px;
+    overflow: hidden; box-shadow: var(--shadow); background: var(--panel);
+  }
+  .term .bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+               background: var(--panel-2); border-bottom: 1px solid var(--line-2); }
+  .term .bar .d { width: 10px; height: 10px; border-radius: 50%; }
+  .term .bar .t { margin-left: 8px; font-size: 12px; color: var(--muted); }
+  .term pre { margin: 0; padding: 15px 16px; background: var(--code-bg);
+              color: var(--code-ink); font-size: 12.8px; line-height: 1.62; overflow-x: auto; }
+  .term .cmt { color: var(--muted); }
+
+  footer.foot {
+    margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 18px;
+  }
+  footer.foot code { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow"><span class="dot"></span>rsagent · rsagent-agent · rsagent-ai</div>
+    <h1>
+      一次工具调用的完整旅程
+      <span class="en">The Life of a Tool Call — from <code>prompt()</code> to <code>AgentEnd</code></span>
+    </h1>
+    <p class="lede">
+      模型说"调用 <code>word_count</code>"之后，到底发生了什么？这张图把
+      <code>Agent::run_turns</code> 里一个完整回合拆成 11 步，标出每一步<b>发生在哪一层</b>、
+      调用<b>哪个函数</b>、以及<b>发出哪些事件</b>。所有名称都取自真实代码，不是示意。
+    </p>
+  </header>
+
+  <div class="stackcard">
+    <svg class="stack" viewBox="0 0 900 250" role="img"
+         aria-label="四层调用栈：CLI 驱动 Agent，Agent 通过 Models 请求 Provider，Agent 执行 Tool">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/>
+        </marker>
+      </defs>
+
+      <!-- boxes -->
+      <g>
+        <rect x="18"  y="30" width="196" height="64" rx="12"
+              style="fill: color-mix(in srgb, var(--cli) 12%, var(--panel)); stroke: var(--cli); stroke-width:1.6"/>
+        <text x="116" y="58" text-anchor="middle" style="fill: var(--ink); font: 700 15px -apple-system,Segoe UI,sans-serif">rsagent</text>
+        <text x="116" y="78" text-anchor="middle" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">CLI · 渲染 · 审批提示</text>
+
+        <rect x="262" y="30" width="196" height="64" rx="12"
+              style="fill: color-mix(in srgb, var(--agent) 12%, var(--panel)); stroke: var(--agent); stroke-width:1.6"/>
+        <text x="360" y="58" text-anchor="middle" style="fill: var(--ink); font: 700 15px -apple-system,Segoe UI,sans-serif">rsagent-agent</text>
+        <text x="360" y="78" text-anchor="middle" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">循环 · 回合 · 工具执行</text>
+
+        <rect x="506" y="30" width="196" height="64" rx="12"
+              style="fill: color-mix(in srgb, var(--ai) 14%, var(--panel)); stroke: var(--ai); stroke-width:1.6"/>
+        <text x="604" y="58" text-anchor="middle" style="fill: var(--ink); font: 700 15px -apple-system,Segoe UI,sans-serif">rsagent-ai</text>
+        <text x="604" y="78" text-anchor="middle" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">Provider · Models · 事件</text>
+
+        <rect x="750" y="30" width="132" height="64" rx="12"
+              style="fill: color-mix(in srgb, var(--tool) 13%, var(--panel)); stroke: var(--tool); stroke-width:1.6"/>
+        <text x="816" y="58" text-anchor="middle" style="fill: var(--ink); font: 700 15px -apple-system,Segoe UI,sans-serif">Tool</text>
+        <text x="816" y="78" text-anchor="middle" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">你的实现</text>
+      </g>
+
+      <!-- arrows: request path -->
+      <line x1="214" y1="46" x2="258" y2="46" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+      <line x1="458" y1="46" x2="502" y2="46" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+      <line x1="702" y1="62" x2="746" y2="62" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+
+      <text x="236" y="36" text-anchor="middle" style="fill: var(--muted); font: 600 10.5px ui-monospace,monospace">prompt()</text>
+      <text x="480" y="36" text-anchor="middle" style="fill: var(--muted); font: 600 10.5px ui-monospace,monospace">stream()</text>
+      <text x="724" y="88" text-anchor="middle" style="fill: var(--muted); font: 600 10.5px ui-monospace,monospace">execute()</text>
+
+      <!-- arrows: event path back -->
+      <path d="M360,94 C360,150 360,150 360,176" style="fill:none; stroke: var(--agent); stroke-width:1.6; stroke-dasharray:5 4"/>
+      <path d="M116,176 L844,176" style="fill:none; stroke: var(--agent); stroke-width:1.6; stroke-dasharray:5 4"/>
+      <path d="M116,176 C116,150 116,150 116,98" style="fill:none; stroke: var(--agent); stroke-width:1.6; stroke-dasharray:5 4" marker-end="url(#ar)"/>
+      <rect x="330" y="164" width="240" height="24" rx="7" style="fill: var(--panel)"/>
+      <text x="450" y="181" text-anchor="middle" style="fill: var(--agent); font: 650 12px ui-monospace,monospace">AgentEvent 事件流（另一条通道）</text>
+
+      <text x="18" y="222" style="fill: var(--muted); font: 500 12.5px -apple-system,Segoe UI,sans-serif">
+        依赖方向永远向下：每层都不知道上层。事件流是唯一的反向通道。
+      </text>
+    </svg>
+    <div class="cap">实线 = 请求向下；虚线 = 事件向上。详见 <code>docs/ARCHITECTURE.md</code> §2 与 §4。</div>
+  </div>
+
+  <div class="cols">
+    <!-- ============ TIMELINE ============ -->
+    <main>
+      <h2 class="section">11 步旅程 · The Journey</h2>
+      <ol class="timeline">
+
+        <li class="step">
+          <span class="bullet">1</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-cli">rsagent</span>
+              <span class="title">你敲下一句话，循环被点亮</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">Agent::prompt(input)</span> 把输入包成一条 <code>Message::user</code> 推进对话记录，
+                 重置取消令牌，然后交给循环。它只负责"开工"，不负责"收工"。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">AgentStart</span>
+                <span class="chip">MessageStart</span>
+                <span class="chip">MessageEnd</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">2</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">进入循环：置位、清错、准备收尾</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">run_loop()</span> 置 <code>is_streaming = true</code>、清空上一轮的
+                 <code>last_error</code>，然后调用真正的核心 <span class="fn">run_turns()</span>。
+                 无论成功还是失败，它都会在最后发一次 <code>AgentEnd</code>。</p>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">3</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">每个回合的开场：插队消息 + 裁剪上下文</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">run_turns()</span> 每轮先做两件事：<span class="fn">inject_steering()</span>
+                 把排队的插队消息写进对话记录；<span class="fn">compact_context()</span> 若超出模型上下文预算
+                 （窗口的 3/4），就<b>按整回合</b>丢弃最旧的消息——首回合与最新回合永远保留，
+                 且工具调用不会与它的结果被拆散。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip">ContextCompacted</span><span class="chip">（仅在裁剪时）</span>
+                <span class="chip hot">TurnStart</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">4</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="badge b-ai">rsagent-ai</span>
+              <span class="title">组装请求，交给提供商</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">stream_turn()</span> 用 <span class="fn">build_context()</span> 打包：
+                 system prompt + 全部消息 + 每个工具的 <code>ToolSpec</code>。
+                 然后 <span class="fn">Models::stream()</span> 按 <code>model.provider</code> 路由到对应
+                 <code>Provider</code>，拿到一条 <code>EventStream</code>。</p>
+              <div class="callout">给模型的永远是 <code>ToolSpec</code>（名称、描述、JSON Schema），
+                不是工具本体——协议契约与执行逻辑因此能各自演进。</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">5</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">边流边播：每个事件都转发给订阅者</span>
+            </div>
+            <div class="body">
+              <p>循环用 <code>tokio::select!</code>（<code>biased</code>，取消优先）同时等两件事：
+                 取消信号与下一个 <code>StreamEvent</code>。收到 <code>Start</code> 就发
+                 <code>MessageStart</code>；此后<b>每一个</b>流事件都原样包进
+                 <code>MessageUpdate</code> 转发出去。终局事件（<code>Done</code> / <code>Error</code>）
+                 用 <span class="fn">terminal_message()</span> 取出最终消息。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">MessageStart</span>
+                <span class="chip">MessageUpdate × N</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">6</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">看停止原因，决定要不要调工具</span>
+            </div>
+            <div class="body">
+              <p>把 assistant 消息写进对话记录后，看 <code>stop_reason</code>：</p>
+              <p>· <code>Error</code> / <code>Aborted</code> → 记入 <code>last_error</code>，发
+                 <code>TurnEnd</code>，<b>结束</b>；<br>
+                 · <code>ToolUse</code> 且带工具调用 → 进入第 7 步；<br>
+                 · 其它 → 发 <code>TurnEnd</code>，有排队的 follow-up 就继续，否则返回。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">MessageEnd</span><span class="chip">TurnEnd</span>
+              </div>
+              <div class="callout warn">模型级失败（缺密钥、网络）<b>不是</b> <code>Result::Err</code>：
+                它被记进 <code>last_error</code>，返回的仍是 <code>Ok(())</code>。
+                CLI 的 <code>--print</code> 会检查 <code>error_message()</code> 来决定退出码。</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">7</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="badge b-cli">rsagent</span>
+              <span class="title">预检与审批——顺序进行，且审批排在"开始"之前</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">run_tool_calls()</span> 先<b>顺序</b>预检每一个调用：
+                 <span class="fn">check_approval()</span> 若该工具 <code>requires_approval()</code> 且有审批器，
+                 就先发 <code>ToolApprovalRequest</code>（仅当审批器真的要问用户），
+                 调用 <code>approver.approve()</code>，再发 <code>ToolApprovalResponse</code>。</p>
+              <p>通过 → 发 <code>ToolExecutionStart</code>，进入待执行队列；
+                 拒绝 → 直接生成一条"被审批策略拒绝"的工具结果。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip">ToolApprovalRequest</span>
+                <span class="chip">ToolApprovalResponse</span>
+                <span class="chip hot">ToolExecutionStart</span>
+              </div>
+              <div class="callout">注释里写得很清楚：<b>审批必须在 start 之前</b>，
+                否则界面会先显示"开始执行"、再回头问"要不要执行"，是误导。</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">8</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="badge b-tool">Tool</span>
+              <span class="title">并行执行——除非批里有"必须顺序"的工具</span>
+            </div>
+            <div class="body">
+              <p>只要这一批里<b>任何一个</b>工具 <code>is_sequential()</code> 为真，整批顺序执行；
+                 否则用 <code>join_all</code> 并行。每个调用走
+                 <span class="fn">run_one()</span> → <span class="fn">execute_one()</span>：</p>
+              <p>按 <code>spec().name</code> 找到工具（找不到就报 <code>unknown tool</code>），
+                 构造 <code>ToolContext</code>（工作目录 / 取消令牌 / 进度通道 / 路径围栏），
+                 然后 <code>tool.execute(call_id, args, &amp;context)</code>。</p>
+              <div class="events"><span class="lbl">工具可发</span>
+                <span class="chip">ToolExecutionUpdate</span><span class="chip">（进度）</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">9</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">回收结果：截断、发事件、写回记录</span>
+            </div>
+            <div class="body">
+              <p>结果先过 <span class="fn">truncate_result()</span>——单条超过 <b>32,000 字符</b>就截断，
+                 免得一次工具输出撑爆上下文。随后发 <code>ToolExecutionEnd</code>（带
+                 <code>content</code> 与仅调用方可见的 <code>details</code>），
+                 从 <code>pending_tool_calls</code> 移除，再把 <code>Message::ToolResult</code>
+                 写进对话记录并发 <code>MessageStart</code> / <code>MessageEnd</code>。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">ToolExecutionEnd</span>
+                <span class="chip">MessageStart</span><span class="chip">MessageEnd</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">10</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">回合收尾，然后回到第 3 步</span>
+            </div>
+            <div class="body">
+              <p>发 <code>TurnEnd</code>（带这一轮的 assistant 消息与全部工具结果）。
+                 只有当<b>每一个</b>结果都要求终止时（<code>terminate</code> 全为真）才提前结束；
+                 否则 <code>continue</code>——此时工具结果已经在上下文里，模型能看到它们，
+                 于是产生新的回合。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">TurnEnd</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <span class="bullet">11</span>
+          <div class="card">
+            <div class="head">
+              <span class="badge b-agent">rsagent-agent</span>
+              <span class="title">运行结束</span>
+            </div>
+            <div class="body">
+              <p><span class="fn">run_loop()</span> 复位 <code>is_streaming</code>、清空
+                 <code>pending_tool_calls</code>，发出最后一条 <code>AgentEnd</code>，带上完整的对话记录。
+                 至此返回值（结局）与事件流（过程）都到齐了。</p>
+              <div class="events"><span class="lbl">发出</span>
+                <span class="chip hot">AgentEnd</span>
+              </div>
+            </div>
+          </div>
+        </li>
+
+      </ol>
+    </main>
+
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="side">
+
+      <div class="panel">
+        <h3>两条通道 · Two Channels</h3>
+        <div class="chan">
+          <div class="row">
+            <div class="k"><span class="pip" style="background: var(--cli)"></span>返回值 = 结局</div>
+            <div class="v"><code>prompt()</code> 返回 <code>Result&lt;(), AgentError&gt;</code>。
+              只表达"跑完了没有"，不表达"模型说了什么"。</div>
+          </div>
+          <div class="row">
+            <div class="k"><span class="pip" style="background: var(--agent)"></span>事件流 = 过程</div>
+            <div class="v">每条 <code>AgentEvent</code> 经无界通道送到订阅者，
+              让 UI 能在另一个任务里边跑边渲染。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>事件词汇表 · AgentEvent</h3>
+        <ul class="vocab">
+          <li><span class="e">AgentStart / AgentEnd</span><span class="w">整次运行</span></li>
+          <li><span class="e">TurnStart / TurnEnd</span><span class="w">一个回合</span></li>
+          <li><span class="e">MessageStart / End</span><span class="w">一条消息</span></li>
+          <li><span class="e">MessageUpdate</span><span class="w">流式增量</span></li>
+          <li><span class="e">ToolExecutionStart</span><span class="w">工具开跑</span></li>
+          <li><span class="e">ToolExecutionUpdate</span><span class="w">工具进度</span></li>
+          <li><span class="e">ToolExecutionEnd</span><span class="w">工具结束</span></li>
+          <li><span class="e">ToolApprovalRequest</span><span class="w">请求审批</span></li>
+          <li><span class="e">ToolApprovalResponse</span><span class="w">审批结果</span></li>
+          <li><span class="e">ContextCompacted</span><span class="w">裁剪上下文</span></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h3>源码坐标 · Where to look</h3>
+        <ul class="src">
+          <li><code>rsagent-agent/src/agent.rs</code> — 循环本体 <code>run_turns</code></li>
+          <li><code>rsagent-agent/src/event.rs</code> — 全部 <code>AgentEvent</code></li>
+          <li><code>rsagent-agent/src/tool.rs</code> — <code>Tool</code> / <code>ToolResult</code></li>
+          <li><code>rsagent-ai/src/provider.rs</code> — <code>Provider</code> / <code>Models</code></li>
+          <li><code>rsagent-ai/src/event.rs</code> — <code>StreamEvent</code></li>
+        </ul>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- ============ TERMINAL ============ -->
+  <div class="term">
+    <div class="bar">
+      <span class="d" style="background:#ff5f57"></span>
+      <span class="d" style="background:#febc2e"></span>
+      <span class="d" style="background:#28c840"></span>
+      <span class="t mono">cargo run -p rsagent-agent --example end_to_end</span>
+    </div>
+<pre><span class="cmt"># 一个自定义 Provider 流式发出一次工具调用，一个自定义 Tool 真正执行它</span>
+run   : start
+turn  : start
+  call   word_count
+  ok   word_count: 4 words  details={"words":4}
+turn  : start
+run   : end
+answer: That sentence has 4 words.</pre>
+  </div>
+
+  <footer class="foot">
+    <span>本页所有函数名与事件名均取自仓库真实代码，非示意。</span>
+    <span>· 架构总览 <code>docs/ARCHITECTURE.md</code></span>
+    <span>· 可运行示例 <code>crates/rsagent-agent/examples/</code></span>
+  </footer>
+
+</div>
+</body>
+</html>

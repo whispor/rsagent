@@ -16,17 +16,22 @@ It is organized as a three-crate workspace, mirroring the layering of the
 
 ## Learn more · 深入学习
 
-New to the code? Two entry points. · 初次读代码？两个入口。
+New to the code? Three entry points. · 初次读代码？三个入口。
 
 - **[Architecture · 架构](docs/ARCHITECTURE.md)** — how the agent loop works, the
   layering, the event flow, and a suggested reading order. · 智能体循环如何运作、分层、
   事件流，以及建议的源码阅读顺序。
+- **[The life of a tool call · 一次工具调用的完整旅程](docs/tool-call-journey.html)** —
+  a visual walkthrough of one turn, step by step, with the real function and event names.
+  Open the file in a browser. · 一个回合的逐步可视化讲解，标注真实的函数名与事件名。
+  用浏览器打开该文件即可。
 - **Runnable examples · 可运行示例** — each is a real, compilable program:
 
   ```bash
   cargo run -p rsagent-agent --example headless         # drive the loop without the CLI · 无头驱动循环
   cargo run -p rsagent-agent --example custom_tool      # add your own tool · 新增自定义工具
   cargo run -p rsagent-ai    --example custom_provider  # add your own provider · 新增自定义提供商
+  cargo run -p rsagent-agent --example end_to_end       # provider + tool together · 提供商与工具协同
   ```
 
 Extending `rsagent` means implementing one of four plain traits — `Tool`, `Provider`,

@@ -196,6 +196,7 @@ Four seams, all plain traits. Implement one and register it; the core does not c
 | Add a provider · 新增提供商 | `rsagent_ai::Provider` | `Models::register` | `examples/custom_provider.rs` |
 | Change the approval policy · 改审批策略 | `rsagent_agent::Approver` | `Agent::with_approver` | `ScopedApprover` in `tests/agent_loop.rs` |
 | Drive the loop headlessly · 无头驱动循环 | — (use `Agent` directly) | — | `examples/headless.rs` |
+| Both seams at once · 两个扩展点协同 | `Tool` + `Provider` | both of the above | `examples/end_to_end.rs` |
 
 Each example is a real, compilable program:
 
@@ -203,7 +204,14 @@ Each example is a real, compilable program:
 cargo run -p rsagent-agent --example headless
 cargo run -p rsagent-agent --example custom_tool
 cargo run -p rsagent-ai    --example custom_provider
+cargo run -p rsagent-agent --example end_to_end
 ```
+
+For the narrative view — one tool call, step by step, with the real function and
+event names — open [`tool-call-journey.html`](tool-call-journey.html) in a browser.
+
+想按"叙事"看一遍——一次工具调用逐步发生了什么，标注真实的函数名与事件名——用浏览器
+打开 [`tool-call-journey.html`](tool-call-journey.html)。
 
 Building a new HTTP provider? The protocol files stay short because the shared
 boilerplate lives in one place: `providers/core.rs` holds the identity / model
