@@ -854,3 +854,87 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(BashTool::new()),
     ]
 }
+
+/// Select built-in tools by name.
+///
+/// When `only` is `Some`, just the listed tools are kept; names in `exclude` are always
+/// dropped afterwards. Returns the selected tools and the requested names (from `only`)
+/// that matched no built-in tool, so the caller can warn about typos.
+pub fn select_builtin_tools(
+    only: Option<&[String]>,
+    exclude: &[&str],
+) -> (Vec<Box<dyn Tool>>, Vec<String>) {
+    let mut tools = builtin_tools();
+    let mut unknown = Vec::new();
+    if let Some(only) = only {
+        for name in only {
+            if !tools.iter().any(|tool| tool.spec().name == *name) {
+                unknown.push(name.clone());
+            }
+        }
+        tools.retain(|tool| only.iter().any(|name| *name == tool.spec().name));
+    }
+    if !exclude.is_empty() {
+        tools.retain(|tool| !exclude.contains(&tool.spec().name.as_str()));
+    }
+    (tools, unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{builtin_tools, select_builtin_tools};
+
+    fn names(tools: &[Box<dyn super::Tool>]) -> Vec<String> {
+        tools.iter().map(|tool| tool.spec().name).collect()
+    }
+
+    #[test]
+    fn builtin_tools_are_registered_in_a_stable_order() {
+        assert_eq!(
+            names(&builtin_tools()),
+            vec![
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_dir",
+                "search",
+                "glob",
+                "webfetch",
+                "bash",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_keeps_the_listed_tools() {
+        let only = vec!["read_file".to_string(), "glob".to_string()];
+        let (tools, unknown) = select_builtin_tools(Some(&only), &[]);
+        assert_eq!(names(&tools), vec!["read_file", "glob"]);
+        assert_eq!(unknown, Vec::<String>::new());
+    }
+
+    #[test]
+    fn exclude_drops_a_tool_from_the_full_set() {
+        let (tools, unknown) = select_builtin_tools(None, &["bash"]);
+        assert_eq!(unknown, Vec::<String>::new());
+        assert!(
+            !names(&tools).contains(&"bash".to_string()),
+            "bash must be dropped"
+        );
+    }
+
+    #[test]
+    fn exclude_wins_over_only() {
+        let only = vec!["read_file".to_string(), "bash".to_string()];
+        let (tools, _unknown) = select_builtin_tools(Some(&only), &["bash"]);
+        assert_eq!(names(&tools), vec!["read_file"]);
+    }
+
+    #[test]
+    fn unknown_names_are_reported() {
+        let only = vec!["read_file".to_string(), "nope".to_string()];
+        let (tools, unknown) = select_builtin_tools(Some(&only), &[]);
+        assert_eq!(names(&tools), vec!["read_file"]);
+        assert_eq!(unknown, vec!["nope".to_string()]);
+    }
+}

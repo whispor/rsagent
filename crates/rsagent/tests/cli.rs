@@ -51,12 +51,29 @@ fn help_lists_the_flags() {
         "--continue",
         "--no-color",
         "--allow-outside-cwd",
+        "--tools",
+        "--no-bash",
     ] {
         assert!(
             stdout.contains(flag),
             "`{flag}` is missing from help: {stdout}"
         );
     }
+}
+
+#[test]
+fn unknown_tool_names_are_reported() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--tools", "read_file,nope"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown tool in --tools: nope"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]

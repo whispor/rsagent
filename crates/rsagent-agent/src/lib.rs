@@ -20,6 +20,6 @@ pub use error::AgentError;
 pub use event::AgentEvent;
 pub use tool::{PathFence, Tool, ToolContext, ToolResult};
 pub use tools::{
-    builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool, ReadFileTool, SearchTool,
-    WebFetchTool, WriteFileTool,
+    builtin_tools, select_builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool,
+    ReadFileTool, SearchTool, WebFetchTool, WriteFileTool,
 };

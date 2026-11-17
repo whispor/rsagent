@@ -110,6 +110,8 @@ A line starting with `/` is a command rather than a prompt:
 | `--continue` | | Resume the default session file (`.rsagent-session.json`). |
 | `--no-color` | `NO_COLOR` | Disable ANSI colors. |
 | `--allow-outside-cwd` | | Let read tools access paths outside the working directory. |
+| `--tools <LIST>` | | Enable only the named tools (comma-separated); default is all built-ins. |
+| `--no-bash` | | Disable the `bash` tool. |
 | `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools
@@ -134,6 +136,10 @@ directory by default: a path that resolves outside it — through `..` or a syml
 rejected. Pass `--allow-outside-cwd` to lift the restriction. The approval prompt for
 `write_file` and `edit_file` flags any target outside the working directory, so a
 mistaken path is visible before you approve it.
+
+The tool set can be narrowed with `--tools <LIST>` (only the named tools are enabled)
+and `--no-bash` (drops `bash` even if `--tools` listed it). An unknown name in `--tools`
+is reported on stderr rather than silently ignored.
 
 `webfetch` requires approval: it is the only tool that contacts an arbitrary external
 host, so the prompt shows the exact URL. It follows redirects, times out after 30s, and

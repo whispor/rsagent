@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use futures::future::FutureExt;
-use rsagent_agent::{builtin_tools, Agent, AgentEvent, Approver, PathFence};
+use rsagent_agent::{select_builtin_tools, Agent, AgentEvent, Approver, PathFence, Tool};
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
     StreamOptions,
@@ -108,6 +108,14 @@ struct Cli {
     /// Let read tools access paths outside the working directory.
     #[arg(long)]
     allow_outside_cwd: bool,
+
+    /// Enable only these tools (comma-separated); default is all built-ins.
+    #[arg(long, value_delimiter = ',')]
+    tools: Option<Vec<String>>,
+
+    /// Disable the `bash` tool.
+    #[arg(long)]
+    no_bash: bool,
 }
 
 #[tokio::main]
@@ -287,7 +295,7 @@ fn build_agent(
     };
 
     let agent = Agent::new(models, model.clone(), system_prompt)
-        .with_tools(builtin_tools())
+        .with_tools(choose_tools(cli, palette))
         .with_cwd(&cli.cwd)
         .with_path_fence(fence)
         .with_max_turns(usize::try_from(cli.max_turns).unwrap_or(50))
@@ -301,6 +309,28 @@ fn build_agent(
         .with_options(options);
 
     (agent, faux_handle, model)
+}
+
+/// Choose the tools the agent may call, honoring `--tools` and `--no-bash`.
+///
+/// `--tools` narrows the set to the listed names; `--no-bash` always drops `bash`
+/// afterwards. Unknown names and an empty result are reported on stderr.
+fn choose_tools(cli: &Cli, palette: Palette) -> Vec<Box<dyn Tool>> {
+    let exclude: &[&str] = if cli.no_bash { &["bash"] } else { &[] };
+    let (tools, unknown) = select_builtin_tools(cli.tools.as_deref(), exclude);
+    for name in &unknown {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!("· unknown tool in --tools: {name}"))
+        );
+    }
+    if tools.is_empty() {
+        eprintln!(
+            "{}",
+            palette.yellow("· warning: no tools are enabled; the agent cannot act")
+        );
+    }
+    tools
 }
 
 /// Print the REPL's slash-command help.
