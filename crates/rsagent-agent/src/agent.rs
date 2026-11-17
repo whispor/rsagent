@@ -32,6 +32,37 @@ use crate::tool::{PathFence, Tool, ToolContext};
 /// * before each request the transcript is trimmed by whole turns if it would exceed
 ///   the model's context window, keeping the first and most recent turns;
 /// * [`abort`](Agent::abort) cancels the current run.
+///
+/// # Examples
+///
+/// Drive one prompt with the offline provider, then read the answer back out of the
+/// transcript:
+///
+/// ```
+/// use rsagent_agent::Agent;
+/// use rsagent_ai::{FauxProvider, FauxResponse, Message, Models};
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let faux = FauxProvider::new();
+/// faux.set_responses(vec![FauxResponse::text("hi there")]);
+/// let model = faux.model();
+///
+/// let mut models = Models::new();
+/// models.register(faux);
+///
+/// let mut agent = Agent::new(models, model, "You are terse.");
+/// agent.prompt("hello").await.expect("the run completes");
+///
+/// let answer = agent.messages().iter().rev().find_map(|message| match message {
+///     Message::Assistant(assistant) if !assistant.to_text().is_empty() => {
+///         Some(assistant.to_text())
+///     }
+///     _ => None,
+/// });
+/// assert_eq!(answer.as_deref(), Some("hi there"));
+/// # }
+/// ```
 pub struct Agent {
     models: Models,
     model: Model,

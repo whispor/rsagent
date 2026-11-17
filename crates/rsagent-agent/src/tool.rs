@@ -152,6 +152,45 @@ impl ToolResult {
 /// Following pi's convention, a failed tool must return `Err(message)` rather than
 /// encoding the failure in its content. The agent reports `Err` results to the model
 /// with `is_error: true`.
+///
+/// # Examples
+///
+/// A tool is a [`ToolSpec`] (what the model sees) plus an [`execute`](Tool::execute)
+/// implementation (what runs):
+///
+/// ```
+/// use async_trait::async_trait;
+/// use rsagent_agent::{Tool, ToolContext, ToolResult};
+/// use rsagent_ai::ToolSpec;
+/// use serde_json::{json, Value};
+///
+/// struct WordCount;
+///
+/// #[async_trait]
+/// impl Tool for WordCount {
+///     fn spec(&self) -> ToolSpec {
+///         ToolSpec::new(
+///             "word_count",
+///             "Count the words in `text`.",
+///             json!({ "type": "object", "properties": { "text": { "type": "string" } } }),
+///         )
+///     }
+///
+///     async fn execute(
+///         &self,
+///         _call_id: &str,
+///         args: Value,
+///         _context: &ToolContext,
+///     ) -> Result<ToolResult, String> {
+///         let text = args.get("text").and_then(Value::as_str).ok_or("missing `text`")?;
+///         Ok(ToolResult::text(text.split_whitespace().count().to_string()))
+///     }
+/// }
+///
+/// let tool = WordCount;
+/// assert_eq!(tool.spec().name, "word_count");
+/// assert!(!tool.requires_approval());
+/// ```
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// The declaration the model sees.

@@ -66,6 +66,44 @@ impl Default for StreamOptions {
 ///
 /// `stream` is intentionally *not* async: it returns immediately and reports all
 /// failures as events, matching pi's contract.
+///
+/// # Examples
+///
+/// A provider owns a model catalog and turns a [`Context`] into a [`StreamEvent`]
+/// stream. Here is the smallest possible one:
+///
+/// ```
+/// use futures::stream;
+/// use rsagent_ai::{
+///     AssistantMessage, ContentBlock, Context, EventStream, Model, Provider, StopReason,
+///     StreamEvent, StreamOptions,
+/// };
+///
+/// struct Fixed;
+///
+/// impl Provider for Fixed {
+///     fn id(&self) -> &str {
+///         "fixed"
+///     }
+///
+///     fn models(&self) -> Vec<Model> {
+///         vec![Model::openai_compatible("fixed", "fixed-1", "")]
+///     }
+///
+///     fn stream(&self, model: Model, _context: Context, _options: StreamOptions) -> EventStream {
+///         let mut message = AssistantMessage::partial(&model);
+///         message.content.push(ContentBlock::text("pong"));
+///         message.stop_reason = StopReason::Stop;
+///         Box::pin(stream::iter(vec![StreamEvent::Done {
+///             reason: StopReason::Stop,
+///             message,
+///         }]))
+///     }
+/// }
+///
+/// assert_eq!(Fixed.id(), "fixed");
+/// assert_eq!(Fixed.models().len(), 1);
+/// ```
 pub trait Provider: Send + Sync {
     /// Stable provider id, e.g. `openai`.
     fn id(&self) -> &str;
