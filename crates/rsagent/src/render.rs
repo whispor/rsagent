@@ -16,6 +16,17 @@ pub(crate) enum ColorChoice {
     Never,
 }
 
+/// How a run's output is split between the answer and its progress chatter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputMode {
+    /// Interactive REPL: progress interleaves with the answer on stdout, and a blank
+    /// line separates one turn's output from the next prompt.
+    Interactive,
+    /// One-shot `--print`: the answer owns stdout while progress (tool activity,
+    /// approval prompts) goes to stderr, so redirected output is exactly the answer.
+    OneShot,
+}
+
 /// ANSI styling that degrades to plain text.
 ///
 /// Color is disabled by `--no-color`, by a non-empty `NO_COLOR` environment variable,
@@ -80,6 +91,8 @@ pub(crate) struct Renderer {
     cwd: PathBuf,
     /// Styling that honors `--no-color` / `NO_COLOR`.
     pub(crate) palette: Palette,
+    /// Where progress goes and whether a trailing blank line is wanted.
+    mode: OutputMode,
 }
 
 impl Renderer {
@@ -89,7 +102,15 @@ impl Renderer {
             thinking_open: false,
             cwd,
             palette,
+            mode: OutputMode::Interactive,
         }
+    }
+
+    /// Choose how progress is separated from the answer (see [`OutputMode`]).
+    #[must_use]
+    pub(crate) fn with_mode(mut self, mode: OutputMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     pub(crate) fn render(&mut self, event: &AgentEvent) {
@@ -128,18 +149,15 @@ impl Renderer {
                 tool_name, args, ..
             } => {
                 self.flush_line();
-                println!(
-                    "{}",
-                    self.palette
-                        .cyan(&format!("⚙ {}", describe_action(tool_name, args)))
+                self.progress_line(
+                    &self
+                        .palette
+                        .cyan(&format!("⚙ {}", describe_action(tool_name, args))),
                 );
             }
             AgentEvent::ToolExecutionUpdate { content, .. } => {
                 self.flush_line();
-                println!(
-                    "{}",
-                    self.palette.dim(&format!("  │ {}", truncate(content, 200)))
-                );
+                self.progress_line(&self.palette.dim(&format!("  │ {}", truncate(content, 200))));
             }
             AgentEvent::ToolExecutionEnd {
                 tool_name,
@@ -155,7 +173,7 @@ impl Renderer {
                 } else {
                     self.palette.green(&label)
                 };
-                println!("{painted}{}", truncate(content, 200));
+                self.progress_line(&format!("{painted}{}", truncate(content, 200)));
             }
             AgentEvent::ContextCompacted { dropped_messages } => {
                 self.flush_line();
@@ -211,24 +229,21 @@ impl Renderer {
         let title = lines
             .next()
             .unwrap_or_else(|| format!("调用工具「{tool_name}」"));
-        println!("{}", self.palette.yellow("? 需要你确认"));
-        println!("{}", self.palette.yellow(&format!("  操作：{title}")));
+        self.progress_line(&self.palette.yellow("? 需要你确认"));
+        self.progress_line(&self.palette.yellow(&format!("  操作：{title}")));
         for line in lines {
-            println!("{}", self.palette.yellow(&format!("  {line}")));
+            self.progress_line(&self.palette.yellow(&format!("  {line}")));
         }
-        println!(
-            "{}",
-            self.palette.yellow("  → 输入 y 再回车 = 只允许这一次")
+        self.progress_line(&self.palette.yellow("  → 输入 y 再回车 = 只允许这一次"));
+        self.progress_line(
+            &self
+                .palette
+                .yellow("  → 输入 a 再回车 = 允许，且本次会话后续操作都不再询问"),
         );
-        println!(
-            "{}",
-            self.palette
-                .yellow("  → 输入 a 再回车 = 允许，且本次会话后续操作都不再询问")
-        );
-        println!(
-            "{}",
-            self.palette
-                .yellow("  → 直接回车 = 拒绝（我会换个方式继续）")
+        self.progress_line(
+            &self
+                .palette
+                .yellow("  → 直接回车 = 拒绝（我会换个方式继续）"),
         );
     }
 
@@ -298,6 +313,25 @@ impl Renderer {
             self.line_open = false;
         }
         self.thinking_open = false;
+    }
+
+    /// Write one line of progress (tool activity, approval prompt) to the stream that
+    /// matches the output mode: stdout when interactive, stderr for one-shot runs.
+    fn progress_line(&self, text: &str) {
+        match self.mode {
+            OutputMode::Interactive => println!("{text}"),
+            OutputMode::OneShot => eprintln!("{text}"),
+        }
+    }
+
+    /// Close out one prompt's output.
+    ///
+    /// The REPL leaves a blank line before the next prompt; a one-shot `--print` run
+    /// keeps stdout to the answer alone, so it only ends the current line.
+    pub(crate) fn finish_prompt(&self) {
+        if self.mode == OutputMode::Interactive {
+            println!();
+        }
     }
 }
 

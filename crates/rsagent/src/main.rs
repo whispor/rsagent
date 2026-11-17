@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use input::InputHandle;
-use render::{ColorChoice, Palette, Renderer};
+use render::{ColorChoice, OutputMode, Palette, Renderer};
 
 const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are rsagent, a concise coding assistant running in a terminal.
@@ -175,7 +175,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let mut renderer = Renderer::new(cli.cwd.clone(), palette);
+    // A one-shot `--print` run keeps stdout to the answer alone; the REPL interleaves.
+    let mode = if cli.print.is_some() {
+        OutputMode::OneShot
+    } else {
+        OutputMode::Interactive
+    };
+    let mut renderer = Renderer::new(cli.cwd.clone(), palette).with_mode(mode);
 
     if let Some(prompt) = cli.print.clone() {
         if let Some(faux) = &faux_handle {
@@ -526,7 +532,7 @@ async fn run_prompt(
         renderer.render(&event);
     }
     renderer.flush_line();
-    println!();
+    renderer.finish_prompt();
     Ok(())
 }
 

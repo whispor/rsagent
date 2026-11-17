@@ -206,6 +206,14 @@ answer, so scripts and CI can detect failures:
 The interactive REPL never exits on a failed turn; it prints the error and waits for
 the next prompt.
 
+In `--print` mode the answer owns stdout while everything else — tool activity, token
+usage, approval prompts, warnings — goes to stderr, so the output can be redirected
+cleanly:
+
+```bash
+rsagent --print "summarize this repo" > answer.md
+```
+
 ## Configuration
 
 Environment variables are read from the process environment. A `.env` file in the

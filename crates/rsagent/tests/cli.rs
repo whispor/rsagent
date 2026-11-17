@@ -26,6 +26,21 @@ fn faux_print_runs_a_turn_end_to_end() {
 }
 
 #[test]
+fn print_stdout_is_only_the_answer() {
+    // In `--print` mode stdout carries the answer and nothing else, so
+    // `rsagent --print ... > answer.txt` yields a clean file: no progress chatter and
+    // no trailing blank line. Progress goes to stderr instead.
+    let output = rsagent()
+        .args(["--faux", "--print", "hi"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "(faux) you said: hi\n", "stdout: {stdout:?}");
+}
+
+#[test]
 fn version_flag_prints_the_crate_version() {
     let output = rsagent().arg("--version").output().expect("run rsagent");
 
