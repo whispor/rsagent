@@ -324,6 +324,200 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// The tool names `--list-tools` printed, one per row.
+///
+/// Source rows and tool rows both start with two spaces; only tool rows carry the
+/// approval column, which is what this filters on.
+fn listed_tools(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter(|line| line.starts_with("  ") && (line.contains("需审批") || line.contains("自动")))
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+/// Write a program that answers `--describe` with one tool named `ping`.
+///
+/// Returns the `(program, args)` for `rsagent.toml`, using paths relative to `dir` so the
+/// configuration needs no escaping on Windows.
+fn describe_only_tool(dir: &std::path::Path) -> (String, Vec<String>) {
+    let json = concat!(
+        r#"{"protocol":1,"tools":[{"name":"ping","description":"Ping.","#,
+        r#""parameters":{"type":"object","properties":{}}}]}"#
+    );
+    if cfg!(windows) {
+        std::fs::write(
+            dir.join("tool.cmd"),
+            format!("@echo off\r\nif \"%~1\"==\"--describe\" echo {json}\r\n"),
+        )
+        .expect("write tool.cmd");
+        (
+            "cmd".to_string(),
+            vec!["/C".to_string(), "tool.cmd".to_string()],
+        )
+    } else {
+        std::fs::write(
+            dir.join("tool.sh"),
+            format!("#!/bin/sh\n[ \"$1\" = \"--describe\" ] && printf '%s\\n' '{json}'\n"),
+        )
+        .expect("write tool.sh");
+        ("sh".to_string(), vec!["tool.sh".to_string()])
+    }
+}
+
+/// Write a `rsagent.toml` with one local source pointing at a fresh fixture.
+fn write_local_config(dir: &std::path::Path) {
+    let (program, args) = describe_only_tool(dir);
+    let args = args
+        .iter()
+        .map(|arg| format!("\"{arg}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        format!(
+            "[[tools.sources]]\nkind = \"local\"\nid = \"demo\"\ncommand = \"{program}\"\nargs = [{args}]\n"
+        ),
+    )
+    .expect("write rsagent.toml");
+}
+
+#[test]
+fn rsagent_toml_narrows_the_builtin_source() {
+    let dir = temp_dir("config-builtin");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"builtin\"\nid = \"core\"\nexclude = [\"bash\"]\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tools = listed_tools(&stdout);
+    assert!(tools.contains(&"read_file".to_string()), "{stdout}");
+    assert!(
+        !tools.contains(&"bash".to_string()),
+        "the config excludes bash: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_tools_flag_overrides_the_config() {
+    let dir = temp_dir("config-override");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"builtin\"\nid = \"core\"\nonly = [\"read_file\"]\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--list-tools", "--tools", "glob"])
+        .output()
+        .expect("run rsagent");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        listed_tools(&stdout),
+        vec!["glob"],
+        "the CLI flag wins over the config: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_broken_config_is_reported_and_the_run_continues() {
+    let dir = temp_dir("config-broken");
+    // `kind` is missing, so the file cannot be parsed.
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nid = \"core\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        output.status.success(),
+        "a bad config must not fail the run: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ignoring config"),
+        "the problem must be reported: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_config_driven_local_source_is_listed() {
+    let dir = temp_dir("config-local");
+    write_local_config(&dir);
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("demo"),
+        "the source id is missing: {stdout}"
+    );
+    assert!(
+        stdout.contains("[local]"),
+        "the source kind is missing: {stdout}"
+    );
+    assert!(
+        listed_tools(&stdout).contains(&"ping".to_string()),
+        "the local tool is missing: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_unknown_source_kind_is_reported_and_skipped() {
+    let dir = temp_dir("config-unknown-kind");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"mcp-stdio\"\nid = \"future\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown source kind `mcp-stdio`"),
+        "the unsupported kind must be reported: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn no_color_output_has_no_escapes() {
     let output = rsagent()

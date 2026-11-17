@@ -6,17 +6,20 @@
     reason = "this binary is the CLI's output layer; printing to the terminal is its purpose"
 )]
 
+mod config;
 mod input;
 mod render;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
-    builtin_tools, select_builtin_tools, Agent, AgentEvent, Approver, PathFence, Tool,
+    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, PathFence, SourceEntry, SourceHealth,
+    ToolCatalog,
 };
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -25,6 +28,7 @@ use rsagent_ai::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use config::{find_upward, Config, SourceConfig};
 use input::InputHandle;
 use render::{truncate, ColorChoice, OutputMode, Palette, Renderer};
 
@@ -145,13 +149,23 @@ async fn main() -> anyhow::Result<()> {
     };
     let palette = Palette::detect(color);
 
+    // Assemble the tool set once, from `rsagent.toml` plus CLI flags, so `--list-tools`
+    // and the agent see exactly the same catalog.
+    let catalog = match build_catalog(&cli, palette).await {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            eprintln!("{}", palette.red(&format!("· {error}")));
+            std::process::exit(2);
+        }
+    };
+
     if cli.list_tools {
-        print_tools(palette);
+        print_catalog(&catalog, palette);
         return Ok(());
     }
 
     let input = InputHandle::spawn();
-    let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette);
+    let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette, catalog);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     agent.subscribe(tx);
@@ -240,6 +254,7 @@ fn build_agent(
     cli: &Cli,
     input: InputHandle,
     palette: Palette,
+    catalog: ToolCatalog,
 ) -> (Agent, Option<FauxProvider>, Model) {
     let default_model = if cli.anthropic {
         "claude-3-5-sonnet-latest"
@@ -325,7 +340,7 @@ fn build_agent(
     };
 
     let agent = Agent::new(models, model.clone(), system_prompt)
-        .with_tools(choose_tools(cli, palette))
+        .with_tools(catalog.into_tools())
         .with_cwd(&cli.cwd)
         .with_path_fence(fence)
         .with_max_turns(usize::try_from(cli.max_turns).unwrap_or(50))
@@ -369,18 +384,135 @@ fn compose_system_prompt(cli: &Cli) -> String {
 /// unreadable file is simply "no instructions" — never a hard error, since running the
 /// agent somewhere without project instructions is normal.
 fn read_project_instructions(start: &Path) -> Option<String> {
-    let start = std::fs::canonicalize(start).ok()?;
-    start
-        .ancestors()
-        .map(|dir| dir.join(PROJECT_INSTRUCTIONS))
-        .find_map(|candidate| std::fs::read_to_string(candidate).ok())
+    let path = find_upward(start, PROJECT_INSTRUCTIONS)?;
+    std::fs::read_to_string(path).ok()
 }
 
-/// Print the built-in tools, their approval requirement, and a one-line description.
-fn print_tools(palette: Palette) {
-    let tools = builtin_tools();
-    println!("内置工具（共 {} 个）：", tools.len());
-    for tool in &tools {
+/// Build the tool sources from `rsagent.toml` and the CLI flags, then assemble them.
+///
+/// A source that cannot be prepared is reported and skipped: one broken source must not
+/// take the whole agent down (`docs/EXTENSIBILITY.md` §3.5).
+async fn build_catalog(cli: &Cli, palette: Palette) -> anyhow::Result<ToolCatalog> {
+    let config = match Config::load(&cli.cwd) {
+        Ok((config, path)) => {
+            if let Some(path) = path {
+                eprintln!("{}", palette.dim(&format!("· config: {}", path.display())));
+            }
+            config
+        }
+        Err(error) => {
+            eprintln!("{}", palette.yellow(&format!("· ignoring config: {error}")));
+            Config::default()
+        }
+    };
+
+    let mut entries = Vec::new();
+    if config.tools.sources.is_empty() {
+        // No configuration: one built-in source, narrowed by `--tools` / `--no-bash`.
+        entries.push(SourceEntry::new(Box::new(builtin_source(
+            cli, None, palette,
+        ))));
+    } else {
+        for spec in &config.tools.sources {
+            match build_source(cli, spec, palette).await {
+                Ok(source) => {
+                    entries.push(match &spec.prefix {
+                        Some(prefix) => SourceEntry::with_prefix(source, prefix.clone()),
+                        None => SourceEntry::new(source),
+                    });
+                }
+                Err(error) => eprintln!(
+                    "{}",
+                    palette.yellow(&format!("· skipping tool source `{}`: {error}", spec.id))
+                ),
+            }
+        }
+    }
+
+    let catalog = ToolCatalog::build(entries).map_err(|error| anyhow::anyhow!("{error}"))?;
+    if catalog.is_empty() {
+        eprintln!(
+            "{}",
+            palette.yellow("· warning: no tools are enabled; the agent cannot act")
+        );
+    }
+    Ok(catalog)
+}
+
+/// Build one source from its configuration entry.
+async fn build_source(
+    cli: &Cli,
+    spec: &SourceConfig,
+    palette: Palette,
+) -> Result<Box<dyn rsagent_agent::ToolSource>, String> {
+    match spec.kind.as_str() {
+        "builtin" => Ok(Box::new(builtin_source(cli, Some(spec), palette))),
+        "local" => {
+            let command = spec
+                .command
+                .as_deref()
+                .ok_or_else(|| "a `local` source needs `command`".to_string())?;
+            let timeout = spec.timeout_secs.map(Duration::from_secs);
+            let source =
+                LocalSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
+            Ok(Box::new(source))
+        }
+        other => Err(format!(
+            "unknown source kind `{other}` (expected `builtin` or `local`)"
+        )),
+    }
+}
+
+/// The built-in source, with CLI flags layered over the config entry.
+///
+/// `--tools` replaces the config's `only`; `--no-bash` adds to the config's `exclude`.
+/// This is the "CLI beats config" half of the precedence rule (§3.3).
+fn builtin_source(cli: &Cli, spec: Option<&SourceConfig>, palette: Palette) -> BuiltinSource {
+    let only = cli
+        .tools
+        .clone()
+        .or_else(|| spec.and_then(|spec| spec.only.clone()));
+    let mut exclude = spec.map_or_else(Vec::new, |spec| spec.exclude.clone());
+    if cli.no_bash && !exclude.iter().any(|name| name == "bash") {
+        exclude.push("bash".to_string());
+    }
+
+    let source = BuiltinSource::new()
+        .with_id(spec.map_or_else(|| "core".to_string(), |spec| spec.id.clone()))
+        .with_selection(only, exclude);
+    for name in source.unknown() {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!("· unknown tool in --tools: {name}"))
+        );
+    }
+    source
+}
+
+/// Print every source, its health, and the tools it offers.
+fn print_catalog(catalog: &ToolCatalog, palette: Palette) {
+    println!("工具来源（共 {} 个）：", catalog.entries().len());
+    for entry in catalog.entries() {
+        let source = entry.source();
+        let health = match source.health() {
+            SourceHealth::Healthy => palette.green("正常"),
+            SourceHealth::Unhealthy(reason) => palette.yellow(&format!("异常（{reason}）")),
+            // `SourceHealth` is `#[non_exhaustive]`: a future variant must not break this.
+            _ => palette.yellow("未知"),
+        };
+        let prefix = entry
+            .prefix()
+            .map_or_else(String::new, |prefix| format!("  前缀 {prefix}"));
+        println!(
+            "  {} [{}] {health}{prefix}",
+            source.id(),
+            source.kind().as_str()
+        );
+    }
+
+    println!();
+    println!("已装配工具（共 {} 个）：", catalog.len());
+    for tool in catalog.tools() {
         let spec = tool.spec();
         let approval = if tool.requires_approval() {
             palette.yellow("需审批")
@@ -388,35 +520,15 @@ fn print_tools(palette: Palette) {
             palette.green("自动")
         };
         println!(
-            "  {:<11} {approval}  {}",
+            "  {:<13} {approval}  {}",
             spec.name,
             truncate(&spec.description, 64)
         );
     }
     println!();
-    println!("用 --tools <名称,...> 只启用其中若干，或 --no-bash 去掉 bash。");
-}
-
-/// Choose the tools the agent may call, honoring `--tools` and `--no-bash`.
-///
-/// `--tools` narrows the set to the listed names; `--no-bash` always drops `bash`
-/// afterwards. Unknown names and an empty result are reported on stderr.
-fn choose_tools(cli: &Cli, palette: Palette) -> Vec<Box<dyn Tool>> {
-    let exclude: &[&str] = if cli.no_bash { &["bash"] } else { &[] };
-    let (tools, unknown) = select_builtin_tools(cli.tools.as_deref(), exclude);
-    for name in &unknown {
-        eprintln!(
-            "{}",
-            palette.yellow(&format!("· unknown tool in --tools: {name}"))
-        );
-    }
-    if tools.is_empty() {
-        eprintln!(
-            "{}",
-            palette.yellow("· warning: no tools are enabled; the agent cannot act")
-        );
-    }
-    tools
+    println!(
+        "来源在 rsagent.toml 的 [[tools.sources]] 中配置；用 --tools / --no-bash 收窄内置集。"
+    );
 }
 
 /// Parse a `--thinking` level into a [`ThinkingLevel`].
