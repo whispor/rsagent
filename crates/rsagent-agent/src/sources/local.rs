@@ -24,18 +24,18 @@
 //! `{"error": ...}` response is a **business** failure: the program is working, so it must
 //! not trip the breaker (decision D4).
 
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::breaker::{BreakerPolicy, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
+
+use super::subprocess::{parse_response, run};
 
 /// The protocol version this client speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -71,7 +71,7 @@ impl LocalSource {
         let program = program.into();
         let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
 
-        let stdout = run(&program, &args, "--describe", None, timeout).await?;
+        let stdout = run(&command_argv(&program, &args, "--describe"), None, timeout).await?;
         let value: Value = serde_json::from_str(&stdout)
             .map_err(|error| format!("`{program} --describe` did not print JSON: {error}"))?;
         let tools = parse_describe(&value)?;
@@ -195,9 +195,7 @@ impl Tool for LocalTool {
 
         let request = json!({ "tool": self.spec.name, "arguments": args });
         let stdout = match run(
-            &self.program,
-            &self.args,
-            "--call",
+            &command_argv(&self.program, &self.args, "--call"),
             Some(&request),
             self.timeout,
         )
@@ -227,90 +225,13 @@ impl Tool for LocalTool {
     }
 }
 
-/// Run the program once, optionally sending `request` on stdin, and return its stdout.
-///
-/// Every error here is connection-class: it means the program could not be talked to.
-async fn run(
-    program: &str,
-    args: &[String],
-    phase: &str,
-    request: Option<&Value>,
-    timeout: Duration,
-) -> Result<String, String> {
-    let mut child = tokio::process::Command::new(program)
-        .args(args)
-        .arg(phase)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("cannot run `{program} {phase}`: {error}"))?;
-
-    // Send the request (if any) and close stdin, so the program sees a clean EOF.
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "stdin was not piped".to_string())?;
-        if let Some(request) = request {
-            let payload = format!("{request}\n");
-            stdin
-                .write_all(payload.as_bytes())
-                .await
-                .map_err(|error| format!("cannot send the request to `{program}`: {error}"))?;
-            let _ = stdin.flush().await;
-        }
-    }
-
-    // Drain both pipes on their own tasks so a full buffer cannot deadlock the wait.
-    let stdout_task = tokio::spawn(read_all(child.stdout.take()));
-    let stderr_task = tokio::spawn(read_all(child.stderr.take()));
-
-    let outcome = tokio::select! {
-        status = child.wait() => Outcome::Exited(status),
-        () = tokio::time::sleep(timeout) => Outcome::TimedOut,
-    };
-
-    let status = match outcome {
-        Outcome::Exited(Ok(status)) => status,
-        Outcome::Exited(Err(error)) => return Err(format!("`{program} {phase}` failed: {error}")),
-        Outcome::TimedOut => {
-            let _ = child.kill().await;
-            return Err(format!(
-                "`{program} {phase}` timed out after {}s and was killed",
-                timeout.as_secs()
-            ));
-        }
-    };
-
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
-    if !status.success() {
-        let code = status
-            .code()
-            .map_or_else(|| "a signal".to_string(), |code| code.to_string());
-        return Err(format!(
-            "`{program} {phase}` exited with {code}: {}",
-            stderr.trim()
-        ));
-    }
-    Ok(stdout.trim().to_string())
-}
-
-/// Why a run stopped.
-enum Outcome {
-    Exited(std::io::Result<std::process::ExitStatus>),
-    TimedOut,
-}
-
-/// Read a pipe to the end, ignoring errors (a broken pipe is reported by the exit status).
-async fn read_all<R: AsyncRead + Unpin>(reader: Option<R>) -> String {
-    let Some(mut reader) = reader else {
-        return String::new();
-    };
-    let mut buffer = String::new();
-    let _ = reader.read_to_string(&mut buffer).await;
-    buffer
+/// The full command line for one phase: the program, its fixed args, then the phase flag.
+fn command_argv(program: &str, args: &[String], phase: &str) -> Vec<String> {
+    let mut command = Vec::with_capacity(args.len() + 2);
+    command.push(program.to_string());
+    command.extend(args.iter().cloned());
+    command.push(phase.to_string());
+    command
 }
 
 /// Read a `--describe` response.
@@ -358,28 +279,9 @@ fn parse_tool_spec(value: &Value) -> Result<LocalToolSpec, String> {
     })
 }
 
-/// Read a `--call` response into a tool result.
-fn parse_response(value: &Value) -> Result<ToolResult, String> {
-    if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(error.to_string());
-    }
-    let content = value
-        .get("content")
-        .ok_or_else(|| "the call response has neither `content` nor `error`".to_string())?;
-    let text = match content {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    };
-    let mut result = ToolResult::text(text);
-    if let Some(details) = value.get("details") {
-        result.details = Some(details.clone());
-    }
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_describe, parse_response};
+    use super::parse_describe;
     use serde_json::json;
 
     #[test]
@@ -416,36 +318,5 @@ mod tests {
     fn describe_rejects_a_tool_without_a_name() {
         let value = json!({ "protocol": 1, "tools": [{ "description": "anonymous" }] });
         assert!(parse_describe(&value).is_err());
-    }
-
-    #[test]
-    fn a_call_error_response_is_a_business_failure() {
-        let error = parse_response(&json!({ "error": "no such thing" }))
-            .expect_err("an error response becomes Err");
-        assert_eq!(error, "no such thing");
-    }
-
-    #[test]
-    fn a_call_content_response_is_the_result() {
-        let result = parse_response(&json!({ "content": "pong" })).expect("parse");
-        assert_eq!(result.content[0].as_text(), Some("pong"));
-    }
-
-    #[test]
-    fn non_string_content_is_rendered_as_json() {
-        let result = parse_response(&json!({ "content": { "n": 1 } })).expect("parse");
-        assert_eq!(result.content[0].as_text(), Some("{\"n\":1}"));
-    }
-
-    #[test]
-    fn details_are_passed_through() {
-        let result =
-            parse_response(&json!({ "content": "ok", "details": { "bytes": 2 } })).expect("parse");
-        assert_eq!(result.details, Some(json!({ "bytes": 2 })));
-    }
-
-    #[test]
-    fn a_response_with_neither_key_is_a_protocol_error() {
-        assert!(parse_response(&json!({ "whatever": 1 })).is_err());
     }
 }

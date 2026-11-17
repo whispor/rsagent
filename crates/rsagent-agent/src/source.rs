@@ -9,9 +9,8 @@ use crate::tool::Tool;
 
 /// What kind of source a [`ToolSource`] is.
 ///
-/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `skill` and `web`. They
-/// are added later — declaring variants with no implementation would be code without a
-/// caller.
+/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `web`. It is added later —
+/// declaring a variant with no implementation would be code without a caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceKind {
@@ -27,6 +26,8 @@ pub enum SourceKind {
     ///
     /// [Model Context Protocol]: https://modelcontextprotocol.io
     McpHttp,
+    /// A folder of scripts declared by a `skill.toml` manifest.
+    Skill,
 }
 
 impl SourceKind {
@@ -37,6 +38,7 @@ impl SourceKind {
             SourceKind::Local => "local",
             SourceKind::McpStdio => "mcp-stdio",
             SourceKind::McpHttp => "mcp-http",
+            SourceKind::Skill => "skill",
         }
     }
 }

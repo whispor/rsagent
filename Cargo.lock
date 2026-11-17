@@ -919,9 +919,11 @@ dependencies = [
  "futures",
  "reqwest",
  "rsagent-ai",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "toml",
 ]
 
 [[package]]

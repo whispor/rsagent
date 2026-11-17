@@ -8,7 +8,9 @@ description = "Stateful agent with tool execution and event streaming, modelled 
 
 [dependencies]
 rsagent-ai.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
