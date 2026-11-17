@@ -69,6 +69,7 @@ fn help_lists_the_flags() {
         "--tools",
         "--no-bash",
         "--thinking",
+        "--list-tools",
     ] {
         assert!(
             stdout.contains(flag),
@@ -104,6 +105,34 @@ fn an_invalid_thinking_level_is_rejected() {
     assert!(
         stderr.contains("unknown thinking level"),
         "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn list_tools_prints_the_builtins_and_exits() {
+    let output = rsagent().arg("--list-tools").output().expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for name in [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "search",
+        "glob",
+        "webfetch",
+        "bash",
+    ] {
+        assert!(
+            stdout.contains(name),
+            "`{name}` is missing from --list-tools: {stdout}"
+        );
+    }
+    // The approval requirement is the point of the listing.
+    assert!(
+        stdout.contains("需审批"),
+        "the approval column is missing: {stdout}"
     );
 }
 

@@ -113,6 +113,7 @@ A line starting with `/` is a command rather than a prompt:
 | `--allow-outside-cwd` | | Let read tools access paths outside the working directory. |
 | `--tools <LIST>` | | Enable only the named tools (comma-separated); default is all built-ins. |
 | `--no-bash` | | Disable the `bash` tool. |
+| `--list-tools` | | List the built-in tools and whether each needs approval, then exit. |
 | `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools

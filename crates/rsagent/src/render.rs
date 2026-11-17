@@ -382,7 +382,7 @@ fn compact(value: &Value) -> String {
     truncate(&rendered, 120)
 }
 
-fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     let single_line = text.replace('\n', " ");
     if single_line.chars().count() <= max {
         single_line

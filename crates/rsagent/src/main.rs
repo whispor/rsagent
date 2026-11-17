@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use futures::future::FutureExt;
-use rsagent_agent::{select_builtin_tools, Agent, AgentEvent, Approver, PathFence, Tool};
+use rsagent_agent::{
+    builtin_tools, select_builtin_tools, Agent, AgentEvent, Approver, PathFence, Tool,
+};
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
     StreamOptions, ThinkingLevel,
@@ -24,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use input::InputHandle;
-use render::{ColorChoice, OutputMode, Palette, Renderer};
+use render::{truncate, ColorChoice, OutputMode, Palette, Renderer};
 
 const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are rsagent, a concise coding assistant running in a terminal.
@@ -117,6 +119,10 @@ struct Cli {
     #[arg(long)]
     no_bash: bool,
 
+    /// List the built-in tools and whether each needs approval, then exit.
+    #[arg(long)]
+    list_tools: bool,
+
     /// Extended-reasoning budget: off, minimal, low, medium, high, xhigh, or max.
     #[arg(long, value_parser = parse_thinking, default_value = "off")]
     thinking: ThinkingLevel,
@@ -134,6 +140,11 @@ async fn main() -> anyhow::Result<()> {
         ColorChoice::Auto
     };
     let palette = Palette::detect(color);
+
+    if cli.list_tools {
+        print_tools(palette);
+        return Ok(());
+    }
 
     let input = InputHandle::spawn();
     let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette);
@@ -327,6 +338,27 @@ fn build_agent(
         .with_options(options);
 
     (agent, faux_handle, model)
+}
+
+/// Print the built-in tools, their approval requirement, and a one-line description.
+fn print_tools(palette: Palette) {
+    let tools = builtin_tools();
+    println!("内置工具（共 {} 个）：", tools.len());
+    for tool in &tools {
+        let spec = tool.spec();
+        let approval = if tool.requires_approval() {
+            palette.yellow("需审批")
+        } else {
+            palette.green("自动")
+        };
+        println!(
+            "  {:<11} {approval}  {}",
+            spec.name,
+            truncate(&spec.description, 64)
+        );
+    }
+    println!();
+    println!("用 --tools <名称,...> 只启用其中若干，或 --no-bash 去掉 bash。");
 }
 
 /// Choose the tools the agent may call, honoring `--tools` and `--no-bash`.
