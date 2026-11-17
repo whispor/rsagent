@@ -4,7 +4,7 @@
 //! stdout: the client sends requests, the server answers, and (unlike the [`local`] source)
 //! the process stays alive between calls. This module implements the small subset rsagent
 //! needs — `initialize`, `tools/list`, and `tools/call` — against protocol revision
-//! [`MCP_PROTOCOL_VERSION`].
+//! [`super::mcp::MCP_PROTOCOL_VERSION`].
 //!
 //! [Model Context Protocol]: https://modelcontextprotocol.io
 //! [`local`]: super::local
@@ -43,12 +43,7 @@ use crate::breaker::{BreakerPolicy, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
-/// The MCP revision this client asks for.
-///
-/// The server may answer with a different revision it supports; the subset used here
-/// (`initialize` / `tools/list` / `tools/call`) is stable across revisions, so any answer
-/// is accepted rather than failing the connection.
-pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+use super::mcp::{initialize_params, parse_call_result, parse_tools, CallError, McpToolSpec};
 
 /// Per-request timeout when the configuration does not set one.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -100,14 +95,6 @@ impl RequestError {
             RequestError::Transport(message) | RequestError::Protocol(message) => message,
         }
     }
-}
-
-/// Why a call to the server failed, from the caller's point of view.
-enum CallError {
-    /// Connection-class: the transport failed (or could not be re-established).
-    Transport(String),
-    /// The server is reachable but rejected the request.
-    Protocol(String),
 }
 
 impl Session {
@@ -180,12 +167,7 @@ impl Session {
 
     /// Send `initialize`, then the `initialized` notification.
     async fn handshake(&mut self, timeout: Duration) -> Result<(), String> {
-        let params = json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "rsagent", "version": env!("CARGO_PKG_VERSION") },
-        });
-        self.request("initialize", params, timeout)
+        self.request("initialize", initialize_params(), timeout)
             .await
             .map_err(RequestError::into_message)?;
         self.notify("notifications/initialized", json!({})).await
@@ -353,15 +335,6 @@ impl Connection {
             Err(RequestError::Protocol(message)) => Err(CallError::Protocol(message)),
         }
     }
-}
-
-/// One tool as declared by the server.
-#[derive(Debug, Clone)]
-struct McpToolSpec {
-    name: String,
-    description: String,
-    parameters: Value,
-    requires_approval: bool,
 }
 
 /// A tool source backed by an MCP server run as a subprocess.
@@ -550,115 +523,9 @@ impl Tool for McpTool {
     }
 }
 
-/// Read the `tools` array of a `tools/list` result.
-fn parse_tools(result: &Value) -> Result<Vec<McpToolSpec>, String> {
-    let tools = result
-        .get("tools")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "`tools/list` returned no `tools` array".to_string())?;
-    tools.iter().map(parse_tool).collect()
-}
-
-/// Read one entry of a `tools/list` result.
-fn parse_tool(value: &Value) -> Result<McpToolSpec, String> {
-    let name = value
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "a listed tool is missing `name`".to_string())?
-        .to_string();
-    let description = value
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let parameters = value
-        .get("inputSchema")
-        .cloned()
-        .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
-    // Approval is the default: an arbitrary server may do anything. A tool that declares
-    // itself read-only (`annotations.readOnlyHint`) opts out.
-    let requires_approval = !value
-        .get("annotations")
-        .and_then(|annotations| annotations.get("readOnlyHint"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    Ok(McpToolSpec {
-        name,
-        description,
-        parameters,
-        requires_approval,
-    })
-}
-
-/// Turn a `tools/call` result into a tool result.
-fn parse_call_result(value: &Value) -> Result<ToolResult, String> {
-    let text = render_content(value.get("content"));
-    let is_error = value
-        .get("isError")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if is_error {
-        return Err(if text.is_empty() {
-            "the tool reported an error".to_string()
-        } else {
-            text
-        });
-    }
-    let mut result = ToolResult::text(text);
-    if let Some(details) = value.get("structuredContent") {
-        result.details = Some(details.clone());
-    }
-    Ok(result)
-}
-
-/// Render an MCP `content` array as plain text.
-fn render_content(content: Option<&Value>) -> String {
-    let Some(blocks) = content.and_then(Value::as_array) else {
-        return String::new();
-    };
-    blocks
-        .iter()
-        .map(render_block)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Render one content block. Non-text blocks get a short placeholder, since a terminal
-/// tool result is text.
-fn render_block(block: &Value) -> String {
-    match block.get("type").and_then(Value::as_str) {
-        Some("text") => block
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        Some(kind @ ("image" | "audio")) => {
-            let mime = block
-                .get("mimeType")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("[{kind}: {mime}]")
-        }
-        Some("resource" | "resource_link") => {
-            let uri = block
-                .get("resource")
-                .and_then(|resource| resource.get("uri"))
-                .and_then(Value::as_str)
-                .or_else(|| block.get("uri").and_then(Value::as_str))
-                .unwrap_or("");
-            format!("[resource: {uri}]")
-        }
-        Some(other) => format!("[{other}]"),
-        None => block.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_call_result, parse_tool, parse_tools, render_content, McpStdioSource, Session,
-    };
+    use super::{McpStdioSource, Session};
     use crate::breaker::BreakerPolicy;
     use crate::source::{SourceHealth, SourceKind, ToolSource};
     use crate::tool::ToolContext;
@@ -952,54 +819,6 @@ mod tests {
             SourceHealth::Unhealthy(reason) => assert!(reason.contains("circuit open"), "{reason}"),
             other => panic!("expected an unhealthy source, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn a_listed_tool_defaults_its_schema_and_approval() {
-        let spec = parse_tool(&json!({ "name": "bare" })).expect("parse");
-        assert_eq!(spec.name, "bare");
-        assert_eq!(
-            spec.parameters,
-            json!({ "type": "object", "properties": {} })
-        );
-        assert!(spec.requires_approval, "approval is the default");
-    }
-
-    #[test]
-    fn a_listed_tool_without_a_name_is_refused() {
-        assert!(parse_tool(&json!({ "description": "anonymous" })).is_err());
-        assert!(parse_tools(&json!({ "noTools": [] })).is_err());
-    }
-
-    #[test]
-    fn a_call_error_result_becomes_err() {
-        let error = parse_call_result(&json!({
-            "content": [{ "type": "text", "text": "nope" }],
-            "isError": true
-        }))
-        .expect_err("isError becomes Err");
-        assert_eq!(error, "nope");
-    }
-
-    #[test]
-    fn a_call_success_renders_text_and_keeps_details() {
-        let result = parse_call_result(&json!({
-            "content": [{ "type": "text", "text": "ok" }],
-            "structuredContent": { "n": 1 }
-        }))
-        .expect("parse");
-        assert_eq!(result.content[0].as_text(), Some("ok"));
-        assert_eq!(result.details, Some(json!({ "n": 1 })));
-    }
-
-    #[test]
-    fn non_text_blocks_get_a_placeholder() {
-        let text = render_content(Some(&json!([
-            { "type": "text", "text": "look:" },
-            { "type": "image", "mimeType": "image/png" },
-            { "type": "resource", "resource": { "uri": "file:///x" } }
-        ])));
-        assert_eq!(text, "look:\n[image: image/png]\n[resource: file:///x]");
     }
 
     #[test]

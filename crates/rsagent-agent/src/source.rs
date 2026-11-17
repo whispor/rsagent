@@ -1,7 +1,7 @@
 //! Where a group of tools comes from.
 //!
 //! `ToolSource` is the single abstraction that makes a compiled-in tool set, a local
-//! program, and (later) an MCP server the same shape. It is expanded at *assembly time*
+//! program, and an MCP server the same shape. It is expanded at *assembly time*
 //! by [`ToolCatalog`](crate::ToolCatalog) into a flat `Vec<Box<dyn Tool>>`; the agent loop
 //! never learns that sources exist (decision D2, `docs/EXTENSIBILITY.md` §3.1).
 
@@ -9,9 +9,9 @@ use crate::tool::Tool;
 
 /// What kind of source a [`ToolSource`] is.
 ///
-/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `mcp-http`, `skill`, and
-/// `web`. They are added later — declaring variants with no implementation would be code
-/// without a caller.
+/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `skill` and `web`. They
+/// are added later — declaring variants with no implementation would be code without a
+/// caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceKind {
@@ -23,6 +23,10 @@ pub enum SourceKind {
     ///
     /// [Model Context Protocol]: https://modelcontextprotocol.io
     McpStdio,
+    /// A [Model Context Protocol] server, reached over HTTP.
+    ///
+    /// [Model Context Protocol]: https://modelcontextprotocol.io
+    McpHttp,
 }
 
 impl SourceKind {
@@ -32,6 +36,7 @@ impl SourceKind {
             SourceKind::Builtin => "builtin",
             SourceKind::Local => "local",
             SourceKind::McpStdio => "mcp-stdio",
+            SourceKind::McpHttp => "mcp-http",
         }
     }
 }
