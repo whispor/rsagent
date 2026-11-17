@@ -297,8 +297,9 @@ impl Session {
     fn stderr_tail(&self) -> String {
         self.stderr
             .lock()
-            .map(|text| text.trim().to_string())
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .trim()
+            .to_string()
     }
 }
 
