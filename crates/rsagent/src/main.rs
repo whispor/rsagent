@@ -185,6 +185,13 @@ async fn main() -> anyhow::Result<()> {
         }
         run_prompt(&mut agent, &mut rx, &mut renderer, prompt).await?;
         save_session(session_path.as_deref(), &agent, palette);
+        // A model-level failure (bad key, network error, provider refusal) ends the
+        // run "successfully" as far as the loop is concerned. In one-shot `--print`
+        // mode that must still be visible to scripts and CI, so exit non-zero; the
+        // renderer has already reported the reason on stderr.
+        if agent.error_message().is_some() {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 

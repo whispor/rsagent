@@ -151,6 +151,34 @@ fn a_zero_turn_limit_is_rejected() {
 }
 
 #[test]
+fn a_print_run_without_an_api_key_exits_nonzero() {
+    // The default provider needs a key; with none it fails the turn, and `--print`
+    // must report that with a non-zero exit code so scripts can detect it. A temp
+    // working directory keeps any nearby `.env` from supplying a key.
+    let dir = temp_dir("no-key");
+    let output = rsagent()
+        .current_dir(&dir)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("RSAGENT_API_KEY")
+        .args(["--print", "hi"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "a missing API key must fail the run: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing API key"),
+        "stderr should explain the failure: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn repl_handles_slash_commands() {
     use std::io::Write;
     use std::process::Stdio;

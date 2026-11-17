@@ -193,6 +193,19 @@ The file is a versioned envelope (`{"version":1,"context":{...}}`), so an older 
 recognizes — and refuses rather than misreads — a file written by a newer one. Files
 in the original bare-`Context` format are still read.
 
+## Exit codes
+
+In `--print` mode the process exits non-zero when the run did not produce a usable
+answer, so scripts and CI can detect failures:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The run finished and the model produced an answer. |
+| `1` | A model-level failure (missing API key, network error, provider error) or the turn limit was hit. |
+
+The interactive REPL never exits on a failed turn; it prints the error and waits for
+the next prompt.
+
 ## Configuration
 
 Environment variables are read from the process environment. A `.env` file in the
