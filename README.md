@@ -337,6 +337,7 @@ source out of the tool list (see decision D9).
 | --- | --- | --- |
 | `-m, --model <ID>` | `RSAGENT_MODEL` | Model id to use (default `gpt-4o-mini`). |
 | `-p, --print <PROMPT>` | | Run one prompt and exit. |
+| `--json` | | Emit the agent event stream as JSON lines on stdout, for CI and scripts (requires `--print`). |
 | `--base-url <URL>` | `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. |
 | `--api-key <KEY>` | `RSAGENT_API_KEY` | API key; overrides the provider's env lookup. |
 | `--faux` | | Use the offline scripted provider. |
@@ -455,6 +456,22 @@ cleanly:
 ```bash
 rsagent --print "summarize this repo" > answer.md
 ```
+
+### JSON output
+
+Pass `--json` (with `--print`) to get the agent's event stream as JSON lines instead of
+terminal output: one object per line, each tagged with a `type` field, in the order the
+events occur (`agentStart`, then per-turn `turnStart` / `messageStart` / `messageUpdate`
+/ `messageEnd` / `turnEnd`, and finally `agentEnd`). Messages and streaming deltas are
+nested objects in the same camelCase, `type`-tagged shape, so one stream carries the
+whole run:
+
+```bash
+rsagent --json --print "list the files here" | jq -c 'select(.type == "toolExecutionEnd")'
+```
+
+The exit-code semantics below are unchanged: a run that fails still exits non-zero, so a
+consumer can rely on both the stream and the code.
 
 ## Configuration
 

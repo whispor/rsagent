@@ -360,7 +360,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | --- | --- | --- | --- |
 | 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
 | 配置优先级 | CLI > env > project > user | ✅ 已实现前三档并文档化（`rsagent.toml`，README） | **MUST 文档化**（§3.3） |
-| 机器可读输出 | `--json` / `--output-format` | 无 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
+| 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 |
 | 稳定性承诺 | semver + 弃用周期 | 无 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
@@ -402,7 +402,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | P2-2 | ✅ `mcp-http` 来源（Streamable HTTP：POST JSON-RPC，接受 JSON 或 SSE 响应） |
 | P2-3 | ✅ `skill` 来源（文件夹 + `SKILL.md` + `skill.toml` → 工具） |
 | P2-4 | ✅ `web` 来源（HTTP 端点 → 工具：GET/HEAD 走查询串，其余方法走 JSON body） |
-| P2-5 | `--json` 输出（§5） |
+| P2-5 | ✅ `--json` 输出（§5） |
 
 ### P3 — 运营与体验
 
@@ -433,6 +433,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D7 | 抽象必须满足 rule of two | 防止为单一调用方引入抽象（北极星①） |
 | D8 | `skill` 来源用 `skill.toml` 清单自描述，而非"扫描文件夹猜工具" | 清单可在**不运行**任何脚本的前提下校验（目录、`SKILL.md`、脚本存在性），且工具名/描述/参数是显式的，不需要约定俗成的目录布局 |
 | D9 | `web` 来源把"收到任意 HTTP 响应"判为**业务**失败，只有 transport 错误才熔断 | 与子进程来源"非零退出即连接类"不同：HTTP 一旦应答就证明端点可达；若把 4xx 也算连接类，模型传错参数（400）就会熔断掉整个来源 |
+| D10 | `--json` 直接给事件类型 `derive(Serialize)`（内部标签 `type` + camelCase），而非手写映射 | 手写映射会与枚举定义漂移（加一个变体就漏一个），违背⑤；复用 `ContentBlock`/`Message` 已有的 `type` 标签约定，嵌套事件自然拼成同一种形状，也最省代码（①）。事件类型本就只含字符串/数字/已可序列化的消息，序列化不会失败 |
 
 ---
 

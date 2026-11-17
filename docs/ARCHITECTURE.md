@@ -121,11 +121,15 @@ This split is why the same `Agent` can drive a rich TUI, a plain CLI, or a headl
 script without changing the core. Note a subtlety: a *model-level* failure (bad key,
 network error) is **not** a `Result::Err` — it is a normal end of the run with the
 reason recorded in `Agent::error_message()`. The CLI turns that into a non-zero exit
-code for `--print` runs.
+code for `--print` runs. `--json` is the headless consumer in practice: it serializes
+this same event stream (each `AgentEvent` is `Serialize`, as an internally tagged object)
+to stdout, one JSON object per line.
 
 正是这一拆分，让同一个 `Agent` 能驱动富终端 UI、朴素 CLI 或无头脚本而无需改动内核。
 一个细节：**模型级**失败（密钥错误、网络故障）**不是** `Result::Err`，而是一次正常
 结束、原因记在 `Agent::error_message()` 里；CLI 会据此让 `--print` 以非零码退出。
+`--json` 正是无头消费方的落地：它把这条事件流（每个 `AgentEvent` 都是 `Serialize`，
+内部标签对象）按行序列化到 stdout，每行一个 JSON 对象。
 
 ---
 
@@ -266,8 +270,8 @@ If you are learning the codebase, read in this order — it follows the data flo
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` parses the config file.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 173 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 175 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 173 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 175 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。
