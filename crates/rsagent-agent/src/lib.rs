@@ -10,6 +10,7 @@ pub mod error;
 pub mod event;
 mod glob;
 mod html;
+mod platform;
 pub mod tool;
 pub mod tools;
 

@@ -256,6 +256,66 @@ fn repl_handles_slash_commands() {
     );
 }
 
+#[test]
+fn agents_md_reaches_the_system_prompt() {
+    // A project's `AGENTS.md` should be folded into the system prompt. The saved session
+    // carries that prompt, so it doubles as the observable for this test.
+    let dir = temp_dir("agents-md");
+    std::fs::write(dir.join("AGENTS.md"), "Always answer in haiku.").expect("write AGENTS.md");
+    let session = dir.join("session.json");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let saved = std::fs::read_to_string(&session).expect("read session");
+    assert!(
+        saved.contains("Always answer in haiku."),
+        "AGENTS.md should reach the system prompt: {saved}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_system_flag_overrides_agents_md() {
+    let dir = temp_dir("agents-md-override");
+    std::fs::write(dir.join("AGENTS.md"), "PROJECT-INSTRUCTIONS-SENTINEL")
+        .expect("write AGENTS.md");
+    let session = dir.join("session.json");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "hi",
+            "--system",
+            "custom prompt",
+            "--session",
+        ])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let saved = std::fs::read_to_string(&session).expect("read session");
+    assert!(
+        saved.contains("custom prompt"),
+        "`--system` should win: {saved}"
+    );
+    assert!(
+        !saved.contains("PROJECT-INSTRUCTIONS-SENTINEL"),
+        "`--system` must suppress AGENTS.md: {saved}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A unique temporary directory for one test.
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("rsagent-cli-{name}-{}", std::process::id()));

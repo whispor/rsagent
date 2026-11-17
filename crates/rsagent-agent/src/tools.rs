@@ -10,11 +10,11 @@ use async_trait::async_trait;
 use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::glob::glob_match;
 use crate::html::html_to_text;
+use crate::platform;
 use crate::tool::{Tool, ToolContext, ToolResult};
 
 /// Directory names that recursive tools never descend into.
@@ -737,21 +737,7 @@ impl Tool for BashTool {
             .and_then(Value::as_u64)
             .map_or(self.timeout, Duration::from_secs);
 
-        #[cfg(windows)]
-        let mut process = {
-            let mut process = Command::new("cmd");
-            process.arg("/C");
-            process
-        };
-        #[cfg(not(windows))]
-        let mut process = {
-            let mut process = Command::new("sh");
-            process.arg("-c");
-            process
-        };
-
-        let mut child = process
-            .arg(&command)
+        let mut child = platform::shell_command(&command)
             .current_dir(&context.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

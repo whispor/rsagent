@@ -123,6 +123,15 @@ A line starting with `/` is a command rather than a prompt:
 | `/clear` | Forget the current transcript (also rewrites the `--session` file). |
 | `/exit` | Quit (also `exit`, `quit`). |
 
+### Project instructions (`AGENTS.md`)
+
+At startup `rsagent` looks for an `AGENTS.md` at or above the working directory and
+folds the nearest one into the system prompt, under a `# Project instructions` heading.
+This repository ships one at its root as an example.
+
+Precedence is `--system` > `AGENTS.md` > built-in prompt: `--system` replaces the prompt
+outright, and `AGENTS.md` is *added to* the built-in prompt rather than replacing it.
+
 ## CLI reference
 
 | Flag | Env | Description |
@@ -134,7 +143,7 @@ A line starting with `/` is a command rather than a prompt:
 | `--faux` | | Use the offline scripted provider. |
 | `--anthropic` | | Talk to an Anthropic Messages API endpoint instead of an OpenAI-compatible one. |
 | `--cwd <DIR>` | | Working directory the agent operates in (default `.`). |
-| `--system <PROMPT>` | | Override the system prompt. |
+| `--system <PROMPT>` | | Override the system prompt (suppresses `AGENTS.md`). |
 | `--max-turns <N>` | | Maximum model turns in a single run (default `50`). |
 | `--temperature <F>` | | Sampling temperature (provider default when unset). |
 | `--max-tokens <N>` | | Maximum tokens to generate per response (provider default when unset). |

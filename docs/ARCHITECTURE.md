@@ -244,11 +244,12 @@ If you are learning the codebase, read in this order — it follows the data flo
 4. `rsagent-ai/src/providers/core.rs` + `sse.rs` — the shared provider skeleton and SSE framing.
 5. `rsagent-ai/src/providers/openai.rs` — one concrete provider, end to end.
 6. `rsagent-agent/src/tool.rs` — the `Tool` trait and `ToolContext`.
-7. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
-8. `rsagent/src/main.rs` — how the CLI wires it all together.
+7. `rsagent-agent/src/tools.rs` — the built-in tools; `platform.rs` holds the one `#[cfg]`.
+8. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
+9. `rsagent/src/main.rs` — how the CLI wires it all together, and `AGENTS.md` handling.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 65+ tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 78 tests that read like
 usage examples, and `--list-tools` prints the built-in tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 65 个以上测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 78 个测试，读起来就像用例；`--list-tools`
 可在运行时打印内置工具清单。

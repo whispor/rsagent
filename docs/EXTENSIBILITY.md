@@ -274,21 +274,27 @@ Windows / macOS / Linux 上**行为一致、构建通过、测试通过**。兼�
 ### 4.2 差异集中 · Centralize the differences
 
 **所有 `#[cfg(...)]` MUST 收敛到 `crates/rsagent-agent/src/platform.rs`**（业务代码里
-MUST NOT 出现平台条件编译）。现状只有 `BashTool` 两处，属于"现在改最便宜"的窗口期。
+MUST NOT 出现平台条件编译）。工作区当前唯一的平台差异是 `BashTool` 的 shell 选择，已
+移入 `platform.rs::shell_command`——业务代码里现在**零** `#[cfg]`。
+
+下表里只有第一行是**今天真实存在的**差异，其余是"等真有需要时再加"的目标：MUST NOT
+为了填满这张表而预先写出没有调用者的代码（北极星①）。
 
 | 差异点 | 现状 | 目标（`platform.rs` 提供） |
 | --- | --- | --- |
-| shell 选择 | `BashTool` 内 `#[cfg]` | `fn shell_command() -> Command`（`cmd /C` / `sh -c`） |
-| 路径规范化 | 散落 | `fn normalize_path(&Path) -> PathBuf`（剥 `\\?\` 前缀） |
-| 可执行后缀 | 无 | `fn executable(name: &str) -> String`（Windows 加 `.exe`） |
+| shell 选择 | ✅ 已收敛：`platform::shell_command`（`cmd /C` / `sh -c`） | `fn shell_command(command: &str) -> Command` |
+| 路径规范化 | 暂无差异：`resolve_within` 两侧都经 `canonicalize`，`\\?\` 前缀一致，比较正确 | `fn normalize_path(&Path) -> PathBuf`（剥 `\\?\` 前缀），仅在需要拿规范化路径与非规范化路径比较时引入 |
+| 可执行后缀 | 暂无差异：当前只经 shell 启动，不直接 spawn 命名可执行文件 | `fn executable(name: &str) -> String`（Windows 加 `.exe`） |
 | 换行 | 无处理 | 读文件保留原样；写文件沿用原换行（不强制 LF） |
-| 终端能力 | `NO_COLOR` + `--no-color` | `fn supports_color() -> bool`（合并 TTY、`TERM=dumb`、`NO_COLOR`） |
+| 终端能力 | `NO_COLOR` + `--no-color`（在 CLI 层） | `fn supports_color() -> bool`（合并 TTY、`TERM=dumb`、`NO_COLOR`） |
 | 中断信号 | tokio 取消令牌 | `fn install_interrupt_handler()`（Unix 信号 / Windows 控制台事件） |
 
 **已知陷阱（MUST 检查）：**
 
-1. `std::fs::canonicalize` 在 Windows 返回 `\\?\C:\...` 前缀形式。`PathFence` 用它做前缀
-   比较，**比较双方必须都经过 `normalize_path`**，否则围栏会误判。
+1. `std::fs::canonicalize` 在 Windows 返回 `\\?\C:\...` 前缀形式。`PathFence` 的
+   `resolve_within` 两侧都走 `canonicalize`，所以前缀一致、比较正确；**规则是**：一旦
+   你把规范化路径与非规范化路径放在一起比较，MUST 先让两边都过同一个 `normalize_path`，
+   否则围栏会误判。
 2. 测试里构造路径 MUST 用 `Path::join` / `PathBuf`，MUST NOT 手拼 `/` 或 `\`。
 3. 会话文件写入 SHOULD 走"写临时文件 + 原子 rename"，避免断电/并发下写出半个 JSON。
 4. 行尾：仓库当前由 Git 处理 CRLF（`.gitattributes` SHOULD 显式声明 `* text=auto eol=lf`），
@@ -317,7 +323,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 
 | 项 | 主流做法 | 本项目 | 决策 |
 | --- | --- | --- | --- |
-| 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | 无 | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
+| 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
 | 配置优先级 | CLI > env > project > user | 未文档化 | **MUST 文档化**（§3.3） |
 | 机器可读输出 | `--json` / `--output-format` | 无 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
@@ -338,10 +344,10 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | 项 | 内容 | 对①的影响 |
 | --- | --- | --- |
 | P0-1 | 一致性测试 `tests/tool_conformance.rs`（§2.5） | 中性（只加测试） |
-| P0-2 | `AGENTS.md` 支持（§5） | +约 20 行 |
-| P0-3 | 平台差异收敛到 `platform.rs`（§4.2） | 中性（移动代码，不新增逻辑） |
-| P0-4 | CI 三平台矩阵（§4.3） | 中性（只改 CI） |
-| P0-5 | `.gitattributes` 固定行尾 | 中性 |
+| P0-2 | ✅ `AGENTS.md` 支持（§5） | +约 20 行 |
+| P0-3 | ✅ 平台差异收敛到 `platform.rs`（§4.2） | 中性（移动代码，不新增逻辑） |
+| P0-4 | ✅ CI 三平台矩阵（§4.3） | 中性（只改 CI） |
+| P0-5 | ✅ `.gitattributes` 固定行尾 | 中性 |
 
 ### P1 — 工具来源骨架
 

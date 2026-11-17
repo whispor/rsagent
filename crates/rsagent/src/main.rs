@@ -33,6 +33,10 @@ You are rsagent, a concise coding assistant running in a terminal.
 Use the provided tools to read and modify files and to run commands.
 Prefer small, focused changes. Explain briefly what you did.";
 
+/// Project instruction file, read from the working directory upward. The name is the
+/// cross-tool convention (`AGENTS.md`), so the same file also serves other agents.
+const PROJECT_INSTRUCTIONS: &str = "AGENTS.md";
+
 /// Session files are wrapped in a versioned envelope, so a future format change is
 /// detected instead of silently misread.
 const SESSION_VERSION: u32 = 1;
@@ -246,10 +250,7 @@ fn build_agent(
         .model
         .clone()
         .unwrap_or_else(|| default_model.to_string());
-    let system_prompt = cli
-        .system
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string());
+    let system_prompt = compose_system_prompt(cli);
 
     let mut models = Models::new();
     let faux_handle: Option<FauxProvider> = if cli.faux {
@@ -338,6 +339,41 @@ fn build_agent(
         .with_options(options);
 
     (agent, faux_handle, model)
+}
+
+/// Compose the system prompt.
+///
+/// Precedence: `--system` wins outright. Otherwise the built-in prompt is used, and any
+/// `AGENTS.md` found at or above the working directory is appended under a heading. The
+/// project file is additive on purpose: the built-in rules about *how to behave* should
+/// survive, while the project file contributes *what this project wants*.
+fn compose_system_prompt(cli: &Cli) -> String {
+    if let Some(system) = &cli.system {
+        return system.clone();
+    }
+    let mut prompt = DEFAULT_SYSTEM_PROMPT.to_string();
+    if let Some(instructions) = read_project_instructions(&cli.cwd) {
+        let instructions = instructions.trim();
+        if !instructions.is_empty() {
+            prompt.push_str("\n\n# Project instructions (AGENTS.md)\n\n");
+            prompt.push_str(instructions);
+            prompt.push('\n');
+        }
+    }
+    prompt
+}
+
+/// The nearest `AGENTS.md` at or above `start`, or `None` when there is none.
+///
+/// Walking upward lets a repo-root `AGENTS.md` apply from any subdirectory. A missing or
+/// unreadable file is simply "no instructions" — never a hard error, since running the
+/// agent somewhere without project instructions is normal.
+fn read_project_instructions(start: &Path) -> Option<String> {
+    let start = std::fs::canonicalize(start).ok()?;
+    start
+        .ancestors()
+        .map(|dir| dir.join(PROJECT_INSTRUCTIONS))
+        .find_map(|candidate| std::fs::read_to_string(candidate).ok())
 }
 
 /// Print the built-in tools, their approval requirement, and a one-line description.
