@@ -70,6 +70,26 @@ impl ContentBlock {
             _ => None,
         }
     }
+
+    /// Concatenate the text of every [`ContentBlock::Text`] in `blocks`.
+    ///
+    /// Non-text blocks (tool calls, images, thinking) are skipped. This is the
+    /// shared "flatten blocks to a string" step used when talking to providers
+    /// whose wire format has no first-class block list.
+    ///
+    /// ```
+    /// use rsagent_ai::message::ContentBlock;
+    ///
+    /// let blocks = [ContentBlock::text("Hello, "), ContentBlock::text("world")];
+    /// assert_eq!(ContentBlock::concat_text(&blocks), "Hello, world");
+    /// ```
+    pub fn concat_text(blocks: &[ContentBlock]) -> String {
+        blocks
+            .iter()
+            .filter_map(ContentBlock::as_text)
+            .collect::<Vec<_>>()
+            .join("")
+    }
 }
 
 /// A system-role message.
@@ -143,11 +163,7 @@ impl AssistantMessage {
 
     /// Concatenate every text block into a single owned string.
     pub fn to_text(&self) -> String {
-        self.content
-            .iter()
-            .filter_map(ContentBlock::as_text)
-            .collect::<Vec<_>>()
-            .join("")
+        ContentBlock::concat_text(&self.content)
     }
 
     /// All tool calls contained in this message.

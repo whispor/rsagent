@@ -10,6 +10,8 @@ use async_stream::stream;
 use futures::StreamExt;
 use serde_json::{json, Value};
 
+use super::core::ProviderCore;
+use super::sse::{self, SseLine};
 use crate::event::{ErrorReason, StreamEvent};
 use crate::message::{AssistantMessage, ContentBlock, Context, Message};
 use crate::provider::{Auth, EventStream, Provider, StreamOptions};
@@ -18,27 +20,21 @@ use crate::types::{now_millis, Model, StopReason, ThinkingLevel, Usage};
 /// An `OpenAI` Chat Completions-compatible provider.
 #[derive(Debug)]
 pub struct OpenAiProvider {
-    id: String,
-    models: Vec<Model>,
-    env_keys: Vec<String>,
-    base_url_override: Option<String>,
+    core: ProviderCore,
 }
 
 impl OpenAiProvider {
     /// Create a provider from its id, model catalog, and API-key environment variables.
     pub fn new(id: impl Into<String>, models: Vec<Model>, env_keys: Vec<String>) -> Self {
         OpenAiProvider {
-            id: id.into(),
-            models,
-            env_keys,
-            base_url_override: None,
+            core: ProviderCore::new(id.into(), models, env_keys),
         }
     }
 
     /// Override the base URL for every model (e.g. point at Ollama or a proxy).
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url_override = Some(base_url.into());
+        self.core.set_base_url(base_url.into());
         self
     }
 
@@ -63,45 +59,27 @@ impl OpenAiProvider {
         let model = Model::openai_compatible(id.clone(), model_id, base_url);
         OpenAiProvider::new(id, vec![model], env_keys)
     }
-
-    fn resolve_api_key(&self) -> Option<String> {
-        for key in &self.env_keys {
-            if let Ok(value) = std::env::var(key) {
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-        None
-    }
-
-    fn effective_base_url(&self, model: &Model) -> String {
-        self.base_url_override
-            .clone()
-            .unwrap_or_else(|| model.base_url.clone())
-    }
 }
 
 impl Provider for OpenAiProvider {
     fn id(&self) -> &str {
-        &self.id
+        self.core.id()
     }
 
     fn models(&self) -> Vec<Model> {
-        self.models.clone()
+        self.core.models()
     }
 
     fn resolve_auth(&self, _model: &Model) -> Auth {
-        Auth {
-            api_key: self.resolve_api_key(),
-            headers: Vec::new(),
-            base_url: self.base_url_override.clone(),
-        }
+        self.core.resolve_auth()
     }
 
     fn stream(&self, model: Model, context: Context, options: StreamOptions) -> EventStream {
-        let api_key = options.api_key.clone().or_else(|| self.resolve_api_key());
-        let base_url = self.effective_base_url(&model);
+        let api_key = options
+            .api_key
+            .clone()
+            .or_else(|| self.core.resolve_api_key());
+        let base_url = self.core.effective_base_url(&model);
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         let body = build_request_body(&model, &context, &options);
         let extra_headers = options.headers;
@@ -141,19 +119,13 @@ impl Provider for OpenAiProvider {
                 match chunk {
                     Ok(bytes) => {
                         buffer.push_str(&String::from_utf8_lossy(&bytes));
-                        while let Some(newline) = buffer.find('\n') {
-                            let line = buffer[..newline].trim_end_matches('\r').to_string();
-                            buffer.drain(..=newline);
-
-                            let Some(data) = line.strip_prefix("data:") else {
+                        while let Some(line) = sse::next_line(&mut buffer) {
+                            let SseLine::Data(data) = sse::classify(&line) else {
                                 continue;
                             };
-                            let data = data.trim();
+                            // OpenAI terminates the stream with a `[DONE]` sentinel.
                             if data == "[DONE]" {
                                 break 'stream;
-                            }
-                            if data.is_empty() {
-                                continue;
                             }
                             if let Ok(value) = serde_json::from_str::<Value>(data) {
                                 for event in parser.handle_chunk(&value) {
@@ -192,7 +164,9 @@ fn to_openai_messages(context: &Context) -> Vec<Value> {
     for message in &context.messages {
         match message {
             Message::System(m) => {
-                out.push(json!({ "role": "system", "content": blocks_to_text(&m.content) }));
+                out.push(
+                    json!({ "role": "system", "content": ContentBlock::concat_text(&m.content) }),
+                );
             }
             Message::User(m) => out.push(user_message(&m.content)),
             Message::Assistant(m) => out.push(assistant_message(m)),
@@ -200,7 +174,7 @@ fn to_openai_messages(context: &Context) -> Vec<Value> {
                 out.push(json!({
                     "role": "tool",
                     "tool_call_id": m.tool_call_id,
-                    "content": blocks_to_text(&m.content),
+                    "content": ContentBlock::concat_text(&m.content),
                 }));
             }
         }
@@ -209,21 +183,13 @@ fn to_openai_messages(context: &Context) -> Vec<Value> {
     out
 }
 
-fn blocks_to_text(blocks: &[ContentBlock]) -> String {
-    blocks
-        .iter()
-        .filter_map(ContentBlock::as_text)
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 fn user_message(blocks: &[ContentBlock]) -> Value {
     let has_image = blocks
         .iter()
         .any(|b| matches!(b, ContentBlock::Image { .. }));
 
     if !has_image {
-        return json!({ "role": "user", "content": blocks_to_text(blocks) });
+        return json!({ "role": "user", "content": ContentBlock::concat_text(blocks) });
     }
 
     let parts: Vec<Value> = blocks

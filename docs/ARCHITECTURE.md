@@ -205,6 +205,17 @@ cargo run -p rsagent-agent --example custom_tool
 cargo run -p rsagent-ai    --example custom_provider
 ```
 
+Building a new HTTP provider? The protocol files stay short because the shared
+boilerplate lives in one place: `providers/core.rs` holds the identity / model
+catalog / key-lookup skeleton (`ProviderCore`), and `providers/sse.rs` handles
+the newline-framed `data:` parsing both streaming APIs use. A new provider only
+needs its own request body and stream parser.
+
+新增 HTTP 提供商时：两个线上协议文件之所以很短，是因为公共样板已被抽出——
+`providers/core.rs` 提供身份 / 模型目录 / 密钥查找骨架（`ProviderCore`），
+`providers/sse.rs` 处理两种流式 API 共用的 SSE `data:` 逐行解析。
+新提供商只需写自己的请求体与流解析器。
+
 ---
 
 ## 9. Reading order · 源码阅读顺序
@@ -216,13 +227,14 @@ If you are learning the codebase, read in this order — it follows the data flo
 1. `rsagent-ai/src/types.rs` — the plain value types (`Model`, `Usage`, `StopReason`).
 2. `rsagent-ai/src/message.rs` — `Message`, `ContentBlock`, `Context`.
 3. `rsagent-ai/src/provider.rs` — the `Provider` trait and the `Models` registry.
-4. `rsagent-ai/src/providers/openai.rs` — one concrete provider, end to end.
-5. `rsagent-agent/src/tool.rs` — the `Tool` trait and `ToolContext`.
-6. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
-7. `rsagent/src/main.rs` — how the CLI wires it all together.
+4. `rsagent-ai/src/providers/core.rs` + `sse.rs` — the shared provider skeleton and SSE framing.
+5. `rsagent-ai/src/providers/openai.rs` — one concrete provider, end to end.
+6. `rsagent-agent/src/tool.rs` — the `Tool` trait and `ToolContext`.
+7. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
+8. `rsagent/src/main.rs` — how the CLI wires it all together.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 60+ tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 65+ tests that read like
 usage examples, and `--list-tools` prints the built-in tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 60 多个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 65 个以上测试，读起来就像用例；`--list-tools`
 可在运行时打印内置工具清单。

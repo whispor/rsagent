@@ -12,6 +12,8 @@ use async_stream::stream;
 use futures::StreamExt;
 use serde_json::{json, Value};
 
+use super::core::ProviderCore;
+use super::sse::{self, SseLine};
 use crate::event::{ErrorReason, StreamEvent};
 use crate::message::{AssistantMessage, ContentBlock, Context, Message};
 use crate::provider::{Auth, EventStream, Provider, StreamOptions};
@@ -23,10 +25,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// An Anthropic Messages-compatible provider.
 #[derive(Debug)]
 pub struct AnthropicProvider {
-    id: String,
-    models: Vec<Model>,
-    env_keys: Vec<String>,
-    base_url_override: Option<String>,
+    core: ProviderCore,
 }
 
 /// Build an Anthropic-flavored [`Model`] with the Messages wire protocol.
@@ -49,17 +48,14 @@ impl AnthropicProvider {
     /// Create a provider from its id, model catalog, and API-key environment variables.
     pub fn new(id: impl Into<String>, models: Vec<Model>, env_keys: Vec<String>) -> Self {
         AnthropicProvider {
-            id: id.into(),
-            models,
-            env_keys,
-            base_url_override: None,
+            core: ProviderCore::new(id.into(), models, env_keys),
         }
     }
 
     /// Override the base URL for every model (e.g. point at a proxy).
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url_override = Some(base_url.into());
+        self.core.set_base_url(base_url.into());
         self
     }
 
@@ -91,45 +87,27 @@ impl AnthropicProvider {
         let model = messages_model(&id, model_id, base_url);
         AnthropicProvider::new(id, vec![model], env_keys)
     }
-
-    fn resolve_api_key(&self) -> Option<String> {
-        for key in &self.env_keys {
-            if let Ok(value) = std::env::var(key) {
-                if !value.is_empty() {
-                    return Some(value);
-                }
-            }
-        }
-        None
-    }
-
-    fn effective_base_url(&self, model: &Model) -> String {
-        self.base_url_override
-            .clone()
-            .unwrap_or_else(|| model.base_url.clone())
-    }
 }
 
 impl Provider for AnthropicProvider {
     fn id(&self) -> &str {
-        &self.id
+        self.core.id()
     }
 
     fn models(&self) -> Vec<Model> {
-        self.models.clone()
+        self.core.models()
     }
 
     fn resolve_auth(&self, _model: &Model) -> Auth {
-        Auth {
-            api_key: self.resolve_api_key(),
-            headers: Vec::new(),
-            base_url: self.base_url_override.clone(),
-        }
+        self.core.resolve_auth()
     }
 
     fn stream(&self, model: Model, context: Context, options: StreamOptions) -> EventStream {
-        let api_key = options.api_key.clone().or_else(|| self.resolve_api_key());
-        let base_url = self.effective_base_url(&model);
+        let api_key = options
+            .api_key
+            .clone()
+            .or_else(|| self.core.resolve_api_key());
+        let base_url = self.core.effective_base_url(&model);
         let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
         let body = build_request_body(&model, &context, &options);
         let extra_headers = options.headers;
@@ -172,19 +150,12 @@ impl Provider for AnthropicProvider {
                 match chunk {
                     Ok(bytes) => {
                         buffer.push_str(&String::from_utf8_lossy(&bytes));
-                        while let Some(newline) = buffer.find('\n') {
-                            let line = buffer[..newline].trim_end_matches('\r').to_string();
-                            buffer.drain(..=newline);
-
+                        while let Some(line) = sse::next_line(&mut buffer) {
                             // Anthropic interleaves `event:` and `data:` lines; only the
                             // `data:` JSON is needed, and it carries its own `type` field.
-                            let Some(data) = line.strip_prefix("data:") else {
+                            let SseLine::Data(data) = sse::classify(&line) else {
                                 continue;
                             };
-                            let data = data.trim();
-                            if data.is_empty() {
-                                continue;
-                            }
                             if let Ok(value) = serde_json::from_str::<Value>(data) {
                                 for event in parser.handle_event(&value) {
                                     yield event;
@@ -232,7 +203,7 @@ fn to_anthropic_messages(context: &Context) -> Vec<Value> {
                 pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": m.tool_call_id,
-                    "content": blocks_to_text(&m.content),
+                    "content": ContentBlock::concat_text(&m.content),
                     "is_error": m.is_error,
                 }));
             }
@@ -249,14 +220,6 @@ fn flush_tool_results(out: &mut Vec<Value>, pending: &mut Vec<Value>) {
     }
     let content = std::mem::take(pending);
     out.push(json!({ "role": "user", "content": content }));
-}
-
-fn blocks_to_text(blocks: &[ContentBlock]) -> String {
-    blocks
-        .iter()
-        .filter_map(ContentBlock::as_text)
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 fn user_blocks(blocks: &[ContentBlock]) -> Vec<Value> {
