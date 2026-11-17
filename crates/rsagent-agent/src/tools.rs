@@ -2,6 +2,7 @@
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -48,6 +49,60 @@ fn required_str(args: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("missing required string argument `{key}`"))
+}
+
+/// A string argument, or `default` when absent.
+fn opt_str(args: &Value, key: &str, default: &str) -> String {
+    args.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or(default)
+        .to_string()
+}
+
+/// A non-negative count argument (e.g. `max_results`), or `default` when absent.
+fn opt_count(args: &Value, key: &str, default: usize) -> usize {
+    args.get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+/// One directory's immediate children, split into subdirectories and files.
+#[derive(Debug)]
+struct Children {
+    dirs: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+/// Read a directory's immediate children, skipping build/vendor subdirectories.
+///
+/// Shared by `search` and `glob` so the skip policy and entry classification live in
+/// one place. The directory passed in is always read; only its children are filtered.
+async fn read_children(dir: &Path) -> Result<Children, String> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|error| format!("failed to read {}: {error}", dir.display()))?;
+
+    let mut children = Children {
+        dirs: Vec::new(),
+        files: Vec::new(),
+    };
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|error| format!("failed to read entry: {error}"))?
+    {
+        let file_type = entry.file_type().await.ok();
+        let path = entry.path();
+        if matches!(file_type.as_ref(), Some(t) if t.is_dir()) {
+            if !is_skipped_dir(&entry.file_name()) {
+                children.dirs.push(path);
+            }
+        } else if matches!(file_type.as_ref(), Some(t) if t.is_file()) {
+            children.files.push(path);
+        }
+    }
+    Ok(children)
 }
 
 /// Read a file's contents as UTF-8 text, with line numbers.
@@ -294,11 +349,7 @@ impl Tool for ListDirTool {
         args: Value,
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or(".")
-            .to_string();
+        let path = opt_str(&args, "path", ".");
         let resolved = context.resolve(&path);
 
         let mut entries = tokio::fs::read_dir(&resolved)
@@ -360,17 +411,8 @@ impl Tool for SearchTool {
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
         let pattern = required_str(&args, "pattern")?;
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or(".")
-            .to_string();
-        let max_results = usize::try_from(
-            args.get("max_results")
-                .and_then(Value::as_u64)
-                .unwrap_or(100),
-        )
-        .unwrap_or(100);
+        let path = opt_str(&args, "path", ".");
+        let max_results = opt_count(&args, "max_results", 100);
         let root = context.resolve(&path);
 
         // An explicit stack avoids async recursion (which would need boxing) and lets us
@@ -379,36 +421,23 @@ impl Tool for SearchTool {
         let mut matches: Vec<String> = Vec::new();
 
         'walk: while let Some(dir) = stack.pop() {
-            let mut entries = tokio::fs::read_dir(&dir)
-                .await
-                .map_err(|error| format!("failed to read {}: {error}", dir.display()))?;
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|error| format!("failed to read entry: {error}"))?
-            {
-                let file_type = entry.file_type().await.ok();
-                let entry_path = entry.path();
-                if matches!(file_type.as_ref(), Some(t) if t.is_dir()) {
-                    if !is_skipped_dir(&entry.file_name()) {
-                        stack.push(entry_path);
-                    }
-                } else if matches!(file_type.as_ref(), Some(t) if t.is_file()) {
-                    // Skip unreadable or non-UTF-8 files rather than failing the search.
-                    let Ok(text) = tokio::fs::read_to_string(&entry_path).await else {
-                        continue;
-                    };
-                    for (index, line) in text.lines().enumerate() {
-                        if line.contains(&pattern) {
-                            matches.push(format!(
-                                "{}:{}: {}",
-                                entry_path.display(),
-                                index + 1,
-                                line.trim()
-                            ));
-                            if matches.len() >= max_results {
-                                break 'walk;
-                            }
+            let children = read_children(&dir).await?;
+            stack.extend(children.dirs);
+            for entry_path in children.files {
+                // Skip unreadable or non-UTF-8 files rather than failing the search.
+                let Ok(text) = tokio::fs::read_to_string(&entry_path).await else {
+                    continue;
+                };
+                for (index, line) in text.lines().enumerate() {
+                    if line.contains(&pattern) {
+                        matches.push(format!(
+                            "{}:{}: {}",
+                            entry_path.display(),
+                            index + 1,
+                            line.trim()
+                        ));
+                        if matches.len() >= max_results {
+                            break 'walk;
                         }
                     }
                 }
@@ -462,17 +491,8 @@ impl Tool for GlobTool {
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
         let pattern = required_str(&args, "pattern")?;
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or(".")
-            .to_string();
-        let max_results = usize::try_from(
-            args.get("max_results")
-                .and_then(Value::as_u64)
-                .unwrap_or(100),
-        )
-        .unwrap_or(100);
+        let path = opt_str(&args, "path", ".");
+        let max_results = opt_count(&args, "max_results", 100);
         let root = context.resolve(&path);
 
         // Same explicit-stack walk as `search`: no async recursion, and it stops the
@@ -481,28 +501,15 @@ impl Tool for GlobTool {
         let mut matches: Vec<String> = Vec::new();
 
         'walk: while let Some(dir) = stack.pop() {
-            let mut entries = tokio::fs::read_dir(&dir)
-                .await
-                .map_err(|error| format!("failed to read {}: {error}", dir.display()))?;
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|error| format!("failed to read entry: {error}"))?
-            {
-                let file_type = entry.file_type().await.ok();
-                let entry_path = entry.path();
-                if matches!(file_type.as_ref(), Some(t) if t.is_dir()) {
-                    if !is_skipped_dir(&entry.file_name()) {
-                        stack.push(entry_path);
-                    }
-                } else if matches!(file_type.as_ref(), Some(t) if t.is_file()) {
-                    let relative = entry_path.strip_prefix(&root).unwrap_or(&entry_path);
-                    let candidate = relative.to_string_lossy().replace('\\', "/");
-                    if glob_match(&pattern, &candidate) {
-                        matches.push(entry_path.display().to_string());
-                        if matches.len() >= max_results {
-                            break 'walk;
-                        }
+            let children = read_children(&dir).await?;
+            stack.extend(children.dirs);
+            for entry_path in children.files {
+                let relative = entry_path.strip_prefix(&root).unwrap_or(&entry_path);
+                let candidate = relative.to_string_lossy().replace('\\', "/");
+                if glob_match(&pattern, &candidate) {
+                    matches.push(entry_path.display().to_string());
+                    if matches.len() >= max_results {
+                        break 'walk;
                     }
                 }
             }
