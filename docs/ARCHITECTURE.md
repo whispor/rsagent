@@ -259,14 +259,15 @@ If you are learning the codebase, read in this order — it follows the data flo
 7. `rsagent-agent/src/tools.rs` — the built-in tools; `platform.rs` holds the one `#[cfg]`.
 8. `rsagent-agent/src/source.rs` + `catalog.rs` — how tools are grouped into *sources* and
    flattened at assembly time; `breaker.rs` is the per-source circuit breaker, and
-   `sources/` holds the live sources (`builtin`, `local`, `mcp-stdio`, `mcp-http`) plus
-   `mcp.rs`, the protocol payloads the two MCP transports share.
+   `sources/` holds the live sources (`builtin`, `local`, `mcp-stdio`, `mcp-http`,
+   `skill`) plus `mcp.rs` (the protocol payloads the two MCP transports share) and
+   `subprocess.rs` (the spawn/timeout/reply runner the two script sources share).
 9. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` parses the config file.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 149 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 162 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 149 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 162 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。

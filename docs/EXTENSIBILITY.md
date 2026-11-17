@@ -41,7 +41,7 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | --- | --- | --- |
 | 工具执行 | `Tool` trait（`crates/rsagent-agent/src/tool.rs`），`ToolSpec`（给模型）与执行分离 | — |
 | 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` 仍是唯一入口；`ToolCatalog` 在装配期把来源展开成该扁平列表 | — |
-| 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` / `LocalSource` / `McpStdioSource` / `McpHttpSource`（`sources/`）四种实现 | `skill` / `web` 待 P2 |
+| 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` / `LocalSource` / `McpStdioSource` / `McpHttpSource` / `SkillSource`（`sources/`）五种实现 | `web` 待 P2 |
 | 提供商 | `Provider` trait + `Models::register`（`rsagent-ai/src/provider.rs`） | — |
 | 审批 | `Approver` trait + `Agent::with_approver` | 语义未文档化（默认 `AllowAll`） |
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
@@ -171,17 +171,17 @@ at assembly time by `ToolCatalog`; the loop never learns where tools come from.
 | `local` | 项目自带的脚本/二进制 | 子进程 stdin/stdout（JSON 行） | 检查可执行文件存在 | ✅ | ✅ **已实现** |
 | `mcp-stdio` | `@modelcontextprotocol/server-filesystem` | 长驻子进程 + JSON-RPC 2.0 over stdio | 配置即安装（`npx`/`uvx` 按需拉取） | 按工具注解 | ✅ **已实现** |
 | `mcp-http` | 远端 MCP 服务 | HTTP POST + JSON / SSE 响应 | 配置即安装（写 URL + 令牌） | 按工具注解 | ✅ **已实现** |
-| `skill` | 一个文件夹 + `SKILL.md` + 脚本 | 文件夹扫描 → 展开为工具 | 目录存在性检查 | ✅ | 待 P2 |
+| `skill` | 一个文件夹 + `SKILL.md` + 脚本 | 每工具一个子进程（JSON 行） | 目录 + `SKILL.md` + `skill.toml` 校验 | ✅ | ✅ **已实现** |
 | `web` | 把某个 HTTP 端点包装成工具 | HTTP | 配置即安装 | ✅ | 待 P2 |
 
 **一种对接方式，多种来源。** 新增来源类型 = 实现 `ToolSource` 一次，而不是改循环。
-`SourceKind` 是 `#[non_exhaustive]`，P2 的其余两种来源会作为新变体加入，不影响下游。
+`SourceKind` 是 `#[non_exhaustive]`，P2 的其余来源会作为新变体加入，不影响下游。
 
 ### 3.3 配置 · Configuration
 
 One file, `rsagent.toml`, project-local, with CLI flags overriding it. **已实现**
 （`crates/rsagent/src/config.rs`）；当前解析 `builtin` / `local` / `mcp-stdio` / `mcp-http`
-四种 `kind`，下面示例里的 `skill` 是 P2 的目标形态。
+/ `skill` 五种 `kind`。
 
 ```toml
 # rsagent.toml
@@ -206,9 +206,9 @@ prefix = "rm"
 headers = { Authorization = "Bearer sk-..." }
 
 [[tools.sources]]
-kind = "skill"                  # ← P2
+kind = "skill"                  # ← 已实现
 id = "team-conventions"
-path = "./skills/conventions"
+path = "./skills/conventions"   # 目录内需有 SKILL.md 与 skill.toml
 
 [[tools.sources]]
 kind = "local"                  # ← 已实现
@@ -219,7 +219,9 @@ timeout_secs = 60
 
 `local` 来源的线协议（version 1）见 README「The `local` source protocol」：程序被调用
 两次，`--describe` 列出工具，`--call` 执行一次调用，均以单行 JSON 通信。`mcp-stdio` /
-`mcp-http` 两种来源说的是标准 MCP，见 README 的两个 MCP 小节。
+`mcp-http` 两种来源说的是标准 MCP，见 README 的两个 MCP 小节。`skill` 来源从一个文件夹
+读取 `skill.toml` 清单（`SKILL.md` 是"这是技能"的标记），每个工具以独立子进程运行，
+回复契约与 `local` 相同，见 README「The `skill` source」。
 
 **优先级 MUST 为：CLI 参数 > 环境变量 > 项目配置 > 用户配置 > 内置默认。** 已实现
 前三档（用户级配置待补）；这条 MUST 写进 `--help` 与 README（§5）。
@@ -387,7 +389,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | --- | --- |
 | P2-1 | ✅ `mcp-stdio` 来源（MCP 协议：`initialize` / `tools/list` / `tools/call`） |
 | P2-2 | ✅ `mcp-http` 来源（Streamable HTTP：POST JSON-RPC，接受 JSON 或 SSE 响应） |
-| P2-3 | `skill` 来源（文件夹 + `SKILL.md` → 工具） |
+| P2-3 | ✅ `skill` 来源（文件夹 + `SKILL.md` + `skill.toml` → 工具） |
 | P2-4 | `web` 来源（HTTP 端点 → 工具） |
 | P2-5 | `--json` 输出（§5） |
 
@@ -418,6 +420,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D5 | 命名冲突报错而非静默覆盖 | 静默覆盖会让模型调到"另一个"工具，是最难排查的一类缺陷 |
 | D6 | 平台差异集中在 `platform.rs`，业务代码禁止 `#[cfg]` | 让平台问题只有一处可看，也让三平台 CI 的失败定位更快 |
 | D7 | 抽象必须满足 rule of two | 防止为单一调用方引入抽象（北极星①） |
+| D8 | `skill` 来源用 `skill.toml` 清单自描述，而非"扫描文件夹猜工具" | 清单可在**不运行**任何脚本的前提下校验（目录、`SKILL.md`、脚本存在性），且工具名/描述/参数是显式的，不需要约定俗成的目录布局 |
 
 ---
 

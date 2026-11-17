@@ -167,6 +167,12 @@ url = "https://mcp.example.com/mcp"
 prefix = "rm"
 timeout_secs = 30
 headers = { Authorization = "Bearer sk-..." }      # sent on every request
+
+[[tools.sources]]
+kind = "skill"            # a folder of scripts declared by a manifest
+id = "team"
+path = "./skills/team"    # holds SKILL.md and skill.toml
+prefix = "team"           # tools appear to the model as team__<name>
 ```
 
 With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
@@ -250,6 +256,42 @@ several at once, unlike `mcp-stdio`.
 unreachable, a request times out, a non-success status with no JSON-RPC error) drops the
 session and re-initializes on the next call, and counts toward the same per-source circuit
 breaker as the other MCP sources; a well-formed JSON-RPC `error` does not.
+
+#### The `skill` source
+
+A `skill` source is a **folder** of scripts, declared by a manifest — the smallest unit
+for packaging a team's tools alongside its notes. Point `path` at a directory that holds
+
+- `SKILL.md` — the skill's documentation, and the marker that the folder *is* a skill;
+- `skill.toml` — one `[[tool]]` entry per tool:
+
+```toml
+# skills/team/skill.toml
+[[tool]]
+name = "lint"
+description = "Lint a path with the team's rules."
+command = "scripts/lint.sh"        # relative to the skill folder, or absolute
+args = ["--strict"]                # fixed args, before the tool's own input
+requires_approval = false          # default: true
+[tool.parameters]                  # JSON Schema for the model; default is an empty object
+type = "object"
+properties.path = { type = "string" }
+required = ["path"]
+```
+
+Each tool runs its `command` as a fresh subprocess with the tool's arguments written to
+stdin as one JSON object, and reads the same `{"content": ...}` / `{"error": ...}` reply as
+a `local` source — so a script is written the same way whichever source runs it. The
+difference is where the tool list comes from: `local` asks the program (`--describe`),
+while a skill reads its manifest, so the folder is self-describing **without being run**.
+The manifest is validated at load time: a missing `SKILL.md`, a missing or malformed
+`skill.toml`, or a `command` that does not exist is reported and the source is skipped.
+
+`requires_approval` defaults to `true` for the same reason as `local` — an arbitrary
+script may do anything. Because each call is its own process (not one long-lived program),
+these tools are **not** sequential, and each source has the same circuit breaker as the
+others: three consecutive connection-class failures (cannot start, timeout, non-zero exit,
+non-JSON output) take it out of the tool list until a cooldown passes.
 
 ## CLI reference
 
