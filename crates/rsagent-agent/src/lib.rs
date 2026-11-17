@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod approval;
+pub mod breaker;
 pub mod cancel;
 pub mod error;
 pub mod event;
@@ -16,6 +17,7 @@ pub mod tools;
 
 pub use agent::Agent;
 pub use approval::{AllowAll, Approver, DenyAll};
+pub use breaker::{BreakerPolicy, BreakerState, CircuitBreaker};
 pub use cancel::CancelToken;
 pub use error::AgentError;
 pub use event::AgentEvent;
