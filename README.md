@@ -14,6 +14,27 @@ It is organized as a three-crate workspace, mirroring the layering of the
 | `rsagent-agent` | Agent loop: turns, tool execution, event stream. Knows nothing about a specific UI. |
 | `rsagent` | The CLI binary: argument parsing, terminal rendering, session handling. |
 
+## Learn more · 深入学习
+
+New to the code? Two entry points. · 初次读代码？两个入口。
+
+- **[Architecture · 架构](docs/ARCHITECTURE.md)** — how the agent loop works, the
+  layering, the event flow, and a suggested reading order. · 智能体循环如何运作、分层、
+  事件流，以及建议的源码阅读顺序。
+- **Runnable examples · 可运行示例** — each is a real, compilable program:
+
+  ```bash
+  cargo run -p rsagent-agent --example headless         # drive the loop without the CLI · 无头驱动循环
+  cargo run -p rsagent-agent --example custom_tool      # add your own tool · 新增自定义工具
+  cargo run -p rsagent-ai    --example custom_provider  # add your own provider · 新增自定义提供商
+  ```
+
+Extending `rsagent` means implementing one of four plain traits — `Tool`, `Provider`,
+`Approver`, or driving `Agent` directly. See
+[Architecture §8 · Extension points](docs/ARCHITECTURE.md#8-extension-points--扩展点).
+扩展 `rsagent` 就是实现四个普通 trait 之一——`Tool`、`Provider`、`Approver`，或直接
+驱动 `Agent`。见[架构 §8 · 扩展点](docs/ARCHITECTURE.md#8-extension-points--扩展点)。
+
 ## Quick start
 
 ```bash
