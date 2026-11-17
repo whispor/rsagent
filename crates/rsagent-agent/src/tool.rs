@@ -9,11 +9,26 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::cancel::CancelToken;
 
+/// Whether filesystem tools may reach outside the working directory.
+///
+/// Read tools honor this by default: a path that resolves (through `..` or a symlink)
+/// to somewhere outside the working directory is rejected with a clear error. The
+/// command-line `--allow-outside-cwd` flag selects [`Unrestricted`](PathFence::Unrestricted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathFence {
+    /// Read tools must stay within the working directory.
+    WorkingDirectory,
+    /// Read tools may reach anywhere the process can read.
+    Unrestricted,
+}
+
 /// Ambient context handed to a tool on each execution.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
     /// Working directory used to resolve relative paths.
     pub cwd: PathBuf,
+    /// When set, read tools must resolve within this directory.
+    fence: Option<PathBuf>,
     progress: Option<UnboundedSender<String>>,
     cancel: CancelToken,
 }
@@ -23,6 +38,7 @@ impl ToolContext {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         ToolContext {
             cwd: cwd.into(),
+            fence: None,
             progress: None,
             cancel: CancelToken::new(),
         }
@@ -39,6 +55,13 @@ impl ToolContext {
     #[must_use]
     pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = cancel;
+        self
+    }
+
+    /// Constrain read tools to `root` (see [`resolve_within`](Self::resolve_within)).
+    #[must_use]
+    pub fn with_fence(mut self, root: impl Into<PathBuf>) -> Self {
+        self.fence = Some(root.into());
         self
     }
 
@@ -59,6 +82,41 @@ impl ToolContext {
             candidate
         } else {
             self.cwd.join(candidate)
+        }
+    }
+
+    /// Resolve a path for reading, requiring it to stay within the fence when one is set.
+    ///
+    /// Symlinks are resolved before the check, so a link that points outside the fence
+    /// is rejected just like a `..` escape. A path that does not exist is reported as an
+    /// error rather than silently accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path cannot be canonicalized, when the fence root cannot
+    /// be canonicalized, or when the resolved path lies outside the fence.
+    pub async fn resolve_within(&self, path: &str) -> Result<PathBuf, String> {
+        let resolved = self.resolve(path);
+        let Some(fence) = &self.fence else {
+            return Ok(resolved);
+        };
+        let real = tokio::fs::canonicalize(&resolved)
+            .await
+            .map_err(|error| format!("cannot access {}: {error}", resolved.display()))?;
+        let boundary = tokio::fs::canonicalize(fence).await.map_err(|error| {
+            format!(
+                "cannot access working directory {}: {error}",
+                fence.display()
+            )
+        })?;
+        if real.starts_with(&boundary) {
+            Ok(real)
+        } else {
+            Err(format!(
+                "path {} is outside the working directory {} (rerun with --allow-outside-cwd to permit)",
+                resolved.display(),
+                boundary.display()
+            ))
         }
     }
 }

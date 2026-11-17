@@ -18,7 +18,7 @@ pub use approval::{AllowAll, Approver, DenyAll};
 pub use cancel::CancelToken;
 pub use error::AgentError;
 pub use event::AgentEvent;
-pub use tool::{Tool, ToolContext, ToolResult};
+pub use tool::{PathFence, Tool, ToolContext, ToolResult};
 pub use tools::{
     builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool, ReadFileTool, SearchTool,
     WebFetchTool, WriteFileTool,

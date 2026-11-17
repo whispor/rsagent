@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use futures::future::FutureExt;
-use rsagent_agent::{builtin_tools, Agent, AgentEvent, Approver};
+use rsagent_agent::{builtin_tools, Agent, AgentEvent, Approver, PathFence};
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
     StreamOptions,
@@ -104,6 +104,10 @@ struct Cli {
     /// Disable ANSI colors (also disabled by the `NO_COLOR` environment variable).
     #[arg(long)]
     no_color: bool,
+
+    /// Let read tools access paths outside the working directory.
+    #[arg(long)]
+    allow_outside_cwd: bool,
 }
 
 #[tokio::main]
@@ -275,9 +279,17 @@ fn build_agent(
         ..StreamOptions::default()
     };
 
+    // Read tools are confined to the working directory unless the user opts out.
+    let fence = if cli.allow_outside_cwd {
+        PathFence::Unrestricted
+    } else {
+        PathFence::WorkingDirectory
+    };
+
     let agent = Agent::new(models, model.clone(), system_prompt)
         .with_tools(builtin_tools())
         .with_cwd(&cli.cwd)
+        .with_path_fence(fence)
         .with_max_turns(usize::try_from(cli.max_turns).unwrap_or(50))
         .with_session_id(format!("rsagent-{}", std::process::id()))
         .with_approver(CliApprover {

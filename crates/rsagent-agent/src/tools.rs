@@ -141,7 +141,7 @@ impl Tool for ReadFileTool {
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
         let path = required_str(&args, "path")?;
-        let resolved = context.resolve(&path);
+        let resolved = context.resolve_within(&path).await?;
         let data = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
@@ -350,7 +350,7 @@ impl Tool for ListDirTool {
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
         let path = opt_str(&args, "path", ".");
-        let resolved = context.resolve(&path);
+        let resolved = context.resolve_within(&path).await?;
 
         let mut entries = tokio::fs::read_dir(&resolved)
             .await
@@ -413,7 +413,7 @@ impl Tool for SearchTool {
         let pattern = required_str(&args, "pattern")?;
         let path = opt_str(&args, "path", ".");
         let max_results = opt_count(&args, "max_results", 100);
-        let root = context.resolve(&path);
+        let root = context.resolve_within(&path).await?;
 
         // An explicit stack avoids async recursion (which would need boxing) and lets us
         // stop the moment `max_results` is reached.
@@ -493,7 +493,7 @@ impl Tool for GlobTool {
         let pattern = required_str(&args, "pattern")?;
         let path = opt_str(&args, "path", ".");
         let max_results = opt_count(&args, "max_results", 100);
-        let root = context.resolve(&path);
+        let root = context.resolve_within(&path).await?;
 
         // Same explicit-stack walk as `search`: no async recursion, and it stops the
         // moment enough matches are found.

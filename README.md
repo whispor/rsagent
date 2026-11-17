@@ -109,6 +109,7 @@ A line starting with `/` is a command rather than a prompt:
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
 | `--continue` | | Resume the default session file (`.rsagent-session.json`). |
 | `--no-color` | `NO_COLOR` | Disable ANSI colors. |
+| `--allow-outside-cwd` | | Let read tools access paths outside the working directory. |
 | `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools
@@ -127,6 +128,12 @@ A line starting with `/` is a command rather than a prompt:
 `search` and `glob` do not descend into build-output or vendor directories (`target`,
 `node_modules`, `.git`, `.venv`, `venv`, `__pycache__`), so matches are not buried
 under generated files. The directory you point them at is still searched.
+
+Read tools (`read_file`, `list_dir`, `search`, `glob`) are confined to the working
+directory by default: a path that resolves outside it — through `..` or a symlink — is
+rejected. Pass `--allow-outside-cwd` to lift the restriction. The approval prompt for
+`write_file` and `edit_file` flags any target outside the working directory, so a
+mistaken path is visible before you approve it.
 
 `webfetch` requires approval: it is the only tool that contacts an arbitrary external
 host, so the prompt shows the exact URL. It follows redirects, times out after 30s, and

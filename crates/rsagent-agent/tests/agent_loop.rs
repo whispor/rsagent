@@ -2,20 +2,30 @@
 
 use std::path::PathBuf;
 
-use rsagent_agent::{builtin_tools, Agent, AgentError, AgentEvent, Approver};
+use rsagent_agent::{builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence};
 use rsagent_ai::{FauxProvider, FauxResponse, Message, Models};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// Build an agent with the built-in tools and a scripted faux provider.
 fn harness(responses: Vec<FauxResponse>) -> (Agent, FauxProvider, UnboundedReceiver<AgentEvent>) {
+    harness_in(std::env::current_dir().expect("current dir"), responses)
+}
+
+/// Like [`harness`], but rooted at `cwd` so the read-tool fence admits paths under it.
+fn harness_in(
+    cwd: impl Into<PathBuf>,
+    responses: Vec<FauxResponse>,
+) -> (Agent, FauxProvider, UnboundedReceiver<AgentEvent>) {
     let faux = FauxProvider::new();
     faux.set_responses(responses);
 
     let mut models = Models::new();
     models.register(faux.clone());
 
-    let mut agent = Agent::new(models, faux.model(), "system").with_tools(builtin_tools());
+    let mut agent = Agent::new(models, faux.model(), "system")
+        .with_tools(builtin_tools())
+        .with_cwd(cwd);
     let (tx, events) = tokio::sync::mpsc::unbounded_channel();
     agent.subscribe(tx);
 
@@ -336,13 +346,16 @@ async fn search_reports_matching_lines_with_paths_and_numbers() {
     std::fs::write(dir.join("a.txt"), "alpha\nneedle here\n").expect("write a");
     std::fs::write(dir.join("b.txt"), "no match\n").expect("write b");
 
-    let (mut agent, _faux, _events) = harness(vec![
-        FauxResponse::tool_calls(vec![(
-            "search",
-            json!({ "pattern": "needle", "path": dir.to_string_lossy() }),
-        )]),
-        FauxResponse::text("done"),
-    ]);
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "search",
+                json!({ "pattern": "needle", "path": dir.to_string_lossy() }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
 
     agent.prompt("search").await.expect("prompt completes");
 
@@ -398,13 +411,16 @@ async fn glob_finds_files_by_pattern() {
     std::fs::write(dir.join("src/lib.rs"), "").expect("write lib");
     std::fs::write(dir.join("README.md"), "").expect("write readme");
 
-    let (mut agent, _faux, _events) = harness(vec![
-        FauxResponse::tool_calls(vec![(
-            "glob",
-            json!({ "pattern": "**/*.rs", "path": dir.to_string_lossy() }),
-        )]),
-        FauxResponse::text("done"),
-    ]);
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "glob",
+                json!({ "pattern": "**/*.rs", "path": dir.to_string_lossy() }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
 
     agent
         .prompt("find rust files")
@@ -429,13 +445,16 @@ async fn search_skips_build_and_vendor_directories() {
     std::fs::write(dir.join("target/buried.txt"), "needle in target\n").expect("write buried");
     std::fs::write(dir.join("src.txt"), "needle in src\n").expect("write src");
 
-    let (mut agent, _faux, _events) = harness(vec![
-        FauxResponse::tool_calls(vec![(
-            "search",
-            json!({ "pattern": "needle", "path": dir.to_string_lossy() }),
-        )]),
-        FauxResponse::text("done"),
-    ]);
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "search",
+                json!({ "pattern": "needle", "path": dir.to_string_lossy() }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
 
     agent.prompt("search").await.expect("prompt completes");
 
@@ -530,13 +549,16 @@ async fn read_file_numbers_lines_and_honors_a_range() {
     std::fs::write(dir.join("poem.txt"), "alpha\nbeta\ngamma\ndelta\n").expect("write poem");
     let path = dir.join("poem.txt").to_string_lossy().into_owned();
 
-    let (mut agent, _faux, _events) = harness(vec![
-        FauxResponse::tool_calls(vec![(
-            "read_file",
-            json!({ "path": path, "offset": 2, "limit": 2 }),
-        )]),
-        FauxResponse::text("done"),
-    ]);
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "read_file",
+                json!({ "path": path, "offset": 2, "limit": 2 }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
 
     agent
         .prompt("read a slice")
@@ -568,10 +590,13 @@ async fn read_file_reads_the_whole_file_by_default() {
     std::fs::write(dir.join("two.txt"), "one\ntwo\n").expect("write file");
     let path = dir.join("two.txt").to_string_lossy().into_owned();
 
-    let (mut agent, _faux, _events) = harness(vec![
-        FauxResponse::tool_calls(vec![("read_file", json!({ "path": path }))]),
-        FauxResponse::text("done"),
-    ]);
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![("read_file", json!({ "path": path }))]),
+            FauxResponse::text("done"),
+        ],
+    );
 
     agent.prompt("read it").await.expect("prompt completes");
 
@@ -584,4 +609,73 @@ async fn read_file_reads_the_whole_file_by_default() {
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn read_file_rejects_paths_outside_the_working_directory() {
+    let root = temp_dir("fence-it");
+    let inside = root.join("inside");
+    std::fs::create_dir_all(&inside).expect("create inside");
+    std::fs::write(root.join("secret.txt"), "top secret\n").expect("write secret");
+    let outside = root.join("secret.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness_in(
+        &inside,
+        vec![
+            FauxResponse::tool_calls(vec![("read_file", json!({ "path": outside }))]),
+            FauxResponse::text("done"),
+        ],
+    );
+
+    agent
+        .prompt("read outside")
+        .await
+        .expect("prompt completes");
+
+    let failed = agent.messages().iter().find_map(|m| match m {
+        Message::ToolResult(r) if r.tool_name == "read_file" => Some((
+            r.is_error,
+            r.content
+                .iter()
+                .filter_map(|block| block.as_text())
+                .collect::<String>(),
+        )),
+        _ => None,
+    });
+    let (is_error, text) = failed.expect("a read_file result");
+    assert!(is_error, "reading outside the fence must fail");
+    assert!(
+        text.contains("outside the working directory"),
+        "got: {text}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn read_file_reaches_outside_when_the_fence_is_off() {
+    let root = temp_dir("no-fence-it");
+    let inside = root.join("inside");
+    std::fs::create_dir_all(&inside).expect("create inside");
+    std::fs::write(root.join("secret.txt"), "top secret\n").expect("write secret");
+    let outside = root.join("secret.txt").to_string_lossy().into_owned();
+
+    let (agent, _faux, _events) = harness_in(
+        &inside,
+        vec![
+            FauxResponse::tool_calls(vec![("read_file", json!({ "path": outside }))]),
+            FauxResponse::text("done"),
+        ],
+    );
+    let mut agent = agent.with_path_fence(PathFence::Unrestricted);
+
+    agent
+        .prompt("read outside")
+        .await
+        .expect("prompt completes");
+
+    let result = tool_result_text(&agent, "read_file");
+    assert!(result.contains("top secret"), "got: {result}");
+
+    std::fs::remove_dir_all(&root).ok();
 }

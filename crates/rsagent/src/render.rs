@@ -1,7 +1,7 @@
 //! Terminal styling and event rendering for the CLI's output paths.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use rsagent_agent::AgentEvent;
 use rsagent_ai::{AssistantMessage, ErrorReason, Message, StreamEvent};
@@ -254,7 +254,11 @@ impl Renderer {
                 } else {
                     format!("新建文件：{path}")
                 };
-                vec![target, format!("说明：将写入约 {bytes} 字节内容。")]
+                let mut lines = vec![target, format!("说明：将写入约 {bytes} 字节内容。")];
+                if looks_outside_cwd(&self.cwd, &path) {
+                    lines.push(outside_warning(&self.cwd));
+                }
+                lines
             }
             "edit_file" => {
                 let path = arg_str(args, "path");
@@ -263,7 +267,7 @@ impl Renderer {
                 } else {
                     "（注意：该文件当前不存在，可能失败）".to_string()
                 };
-                vec![
+                let mut lines = vec![
                     format!("修改文件：{path}{warning}"),
                     format!(
                         "改动：把 {} 替换为 {}",
@@ -271,7 +275,11 @@ impl Renderer {
                         quote(&arg_str(args, "new_string"))
                     ),
                     "说明：只替换这一处文字，文件其它内容保持不变。".to_string(),
-                ]
+                ];
+                if looks_outside_cwd(&self.cwd, &path) {
+                    lines.push(outside_warning(&self.cwd));
+                }
+                lines
             }
             "webfetch" => vec![
                 format!("抓取网页：{}", arg_str(args, "url")),
@@ -348,4 +356,39 @@ fn truncate(text: &str, max: usize) -> String {
         let truncated: String = single_line.chars().take(max).collect();
         format!("{truncated}…")
     }
+}
+
+/// The warning line shown when a mutating tool targets a path outside the working directory.
+fn outside_warning(cwd: &Path) -> String {
+    format!(
+        "⚠ 该路径在工作目录之外：{}（请确认你确实要改动这里）",
+        cwd.display()
+    )
+}
+
+/// Whether `path` lexically points outside `cwd`, without touching the filesystem.
+///
+/// This is only a best-effort hint for the approval prompt; the read-tool fence is what
+/// enforces the boundary, by canonicalizing. A relative path counts as outside when it
+/// climbs above the working directory with `..`; an absolute path counts as outside when
+/// it is not already under `cwd`.
+fn looks_outside_cwd(cwd: &Path, path: &str) -> bool {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return !candidate.starts_with(cwd);
+    }
+    let mut depth: i32 = 0;
+    for component in candidate.components() {
+        match component {
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            Component::Normal(_) => depth += 1,
+            _ => {}
+        }
+    }
+    false
 }

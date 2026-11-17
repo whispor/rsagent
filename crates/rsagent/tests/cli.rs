@@ -50,6 +50,7 @@ fn help_lists_the_flags() {
         "--anthropic",
         "--continue",
         "--no-color",
+        "--allow-outside-cwd",
     ] {
         assert!(
             stdout.contains(flag),

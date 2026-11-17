@@ -16,7 +16,7 @@ use crate::approval::Approver;
 use crate::cancel::CancelToken;
 use crate::error::AgentError;
 use crate::event::AgentEvent;
-use crate::tool::{Tool, ToolContext};
+use crate::tool::{PathFence, Tool, ToolContext};
 
 /// A coding agent driven by an event loop.
 ///
@@ -42,6 +42,7 @@ pub struct Agent {
     subscribers: Vec<UnboundedSender<AgentEvent>>,
     options: StreamOptions,
     cwd: PathBuf,
+    fence: PathFence,
     max_turns: usize,
     cancel: CancelToken,
     steering: VecDeque<Message>,
@@ -63,6 +64,7 @@ impl std::fmt::Debug for Agent {
             .field("subscribers", &self.subscribers.len())
             .field("options", &self.options)
             .field("cwd", &self.cwd)
+            .field("fence", &self.fence)
             .field("max_turns", &self.max_turns)
             .field("is_streaming", &self.is_streaming)
             .field("steering", &self.steering.len())
@@ -89,6 +91,7 @@ impl Agent {
             subscribers: Vec::new(),
             options: StreamOptions::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            fence: PathFence::WorkingDirectory,
             max_turns: 50,
             cancel: CancelToken::new(),
             steering: VecDeque::new(),
@@ -119,6 +122,13 @@ impl Agent {
     #[must_use]
     pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = cwd.into();
+        self
+    }
+
+    /// Set whether read tools are confined to the working directory.
+    #[must_use]
+    pub fn with_path_fence(mut self, fence: PathFence) -> Self {
+        self.fence = fence;
         self
     }
 
@@ -503,9 +513,12 @@ impl Agent {
             return Executed::error(call_id, name, format!("unknown tool: {name}"));
         };
 
-        let context = ToolContext::new(self.cwd.clone())
+        let mut context = ToolContext::new(self.cwd.clone())
             .with_cancel(self.cancel.clone())
             .with_progress(self.progress_sender(call_id));
+        if self.fence == PathFence::WorkingDirectory {
+            context = context.with_fence(self.cwd.clone());
+        }
 
         match tool.execute(call_id, args, &context).await {
             Ok(result) => Executed {
