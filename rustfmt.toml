@@ -1,0 +1,8 @@
+# Keep `cargo fmt` byte-identical across platforms.
+# 让 `cargo fmt` 的结果跨平台完全一致。
+#
+# Without this, rustfmt's `newline_style = "Auto"` can emit CRLF on Windows and LF
+# elsewhere, so `cargo fmt --check` passes on one CI runner and fails on another.
+# 缺了它，rustfmt 默认的 `Auto` 会在 Windows 上写 CRLF、别处写 LF，
+# 导致 `cargo fmt --check` 在一个 CI runner 上过、在另一个上挂。
+newline_style = "Unix"

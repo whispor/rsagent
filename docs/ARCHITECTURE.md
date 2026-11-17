@@ -213,6 +213,12 @@ event names — open [`tool-call-journey.html`](tool-call-journey.html) in a bro
 想按"叙事"看一遍——一次工具调用逐步发生了什么，标注真实的函数名与事件名——用浏览器
 打开 [`tool-call-journey.html`](tool-call-journey.html)。
 
+For the **rules** behind extending any of these seams — the recipe, the invariants, and
+the PR checklist — see [`EXTENSIBILITY.md`](EXTENSIBILITY.md).
+
+想了解扩展这些缝时**必须遵守的规则**——配方、不变量、提交前检查清单——见
+[`EXTENSIBILITY.md`](EXTENSIBILITY.md)。
+
 Building a new HTTP provider? The protocol files stay short because the shared
 boilerplate lives in one place: `providers/core.rs` holds the identity / model
 catalog / key-lookup skeleton (`ProviderCore`), and `providers/sse.rs` handles

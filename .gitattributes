@@ -1,0 +1,21 @@
+# Normalize line endings across platforms. · 跨平台统一行尾。
+#
+# Store text as LF in the repository; check it out as LF everywhere so the three
+# platform CI jobs (and `cargo fmt --check`) see byte-identical sources.
+# 仓库内统一存 LF，检出一律 LF，让三平台 CI 与 `cargo fmt --check` 看到完全一致的字节。
+* text=auto eol=lf
+
+# Windows-only helpers still need CRLF to be usable in Notepad-era tooling.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets must never be touched. · 二进制资源不做任何转换。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+
+# Keep diffs readable for generated files. · 生成物在 diff 中折叠。
+Cargo.lock linguist-generated=true
