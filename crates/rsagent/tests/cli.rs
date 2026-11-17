@@ -544,6 +544,32 @@ fn a_config_driven_mcp_stdio_source_is_listed() {
 }
 
 #[test]
+fn an_unreachable_mcp_http_source_is_reported_and_skipped() {
+    let dir = temp_dir("config-mcp-http");
+    // Port 1 on loopback is never listening, so the handshake fails at load time.
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"mcp-http\"\nid = \"remote\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipping tool source `remote`"),
+        "the unreachable source must be reported and skipped: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn an_unknown_source_kind_is_reported_and_skipped() {
     let dir = temp_dir("config-unknown-kind");
     std::fs::write(

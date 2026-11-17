@@ -5,6 +5,7 @@
 //! (`docs/EXTENSIBILITY.md` §3.3). A missing file simply means "no configuration"; a file
 //! that exists but does not parse is reported, never silently ignored.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -38,7 +39,8 @@ pub(crate) struct Tools {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceConfig {
-    /// The source kind: `builtin`, `local`, or `mcp-stdio` (`docs/EXTENSIBILITY.md` §3.2).
+    /// The source kind: `builtin`, `local`, `mcp-stdio`, or `mcp-http`
+    /// (`docs/EXTENSIBILITY.md` §3.2).
     pub kind: String,
     /// A stable id, unique among sources.
     pub id: String,
@@ -51,13 +53,20 @@ pub(crate) struct SourceConfig {
     /// Always drop these tools (built-in sources).
     #[serde(default)]
     pub exclude: Vec<String>,
-    /// The program to run (local sources).
+    /// The program to run (local and `mcp-stdio` sources).
     #[serde(default)]
     pub command: Option<String>,
-    /// Fixed arguments passed to `command` before the phase flag (local sources).
+    /// Fixed arguments passed to `command` before the phase flag (local and `mcp-stdio`
+    /// sources).
     #[serde(default)]
     pub args: Vec<String>,
-    /// Per-call timeout in seconds (local sources; default 60).
+    /// The endpoint URL (`mcp-http` sources).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Extra request headers, e.g. `Authorization` (`mcp-http` sources).
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// Per-call timeout in seconds (local and MCP sources; default 60).
     #[serde(default)]
     pub timeout_secs: Option<u64>,
 }
@@ -135,6 +144,32 @@ mod tests {
         assert_eq!(local.args, vec!["--verbose".to_string()]);
         assert_eq!(local.timeout_secs, Some(5));
         assert_eq!(local.prefix.as_deref(), Some("rel"));
+    }
+
+    #[test]
+    fn an_mcp_http_source_parses_its_url_and_headers() {
+        let config = Config::parse(
+            r#"
+            [[tools.sources]]
+            kind = "mcp-http"
+            id = "remote"
+            url = "https://mcp.example.com/mcp"
+            prefix = "rm"
+            timeout_secs = 30
+            headers = { Authorization = "Bearer token" }
+        "#,
+        )
+        .expect("parse");
+
+        let source = &config.tools.sources[0];
+        assert_eq!(source.kind, "mcp-http");
+        assert_eq!(source.url.as_deref(), Some("https://mcp.example.com/mcp"));
+        assert_eq!(source.timeout_secs, Some(30));
+        let headers = source.headers.as_ref().expect("headers");
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer token")
+        );
     }
 
     #[test]

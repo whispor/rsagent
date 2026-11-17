@@ -18,8 +18,8 @@ use std::time::Duration;
 use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
-    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpStdioSource, PathFence,
-    SourceEntry, SourceHealth, ToolCatalog,
+    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpHttpSource, McpStdioSource,
+    PathFence, SourceEntry, SourceHealth, ToolCatalog,
 };
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -467,8 +467,23 @@ async fn build_source(
                 McpStdioSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
             Ok(Box::new(source))
         }
+        "mcp-http" => {
+            let url = spec
+                .url
+                .as_deref()
+                .ok_or_else(|| "an `mcp-http` source needs `url`".to_string())?;
+            let headers = spec
+                .headers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let timeout = spec.timeout_secs.map(Duration::from_secs);
+            let source = McpHttpSource::new(spec.id.clone(), url, headers, timeout).await?;
+            Ok(Box::new(source))
+        }
         other => Err(format!(
-            "unknown source kind `{other}` (expected `builtin`, `local`, or `mcp-stdio`)"
+            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, or `mcp-http`)"
         )),
     }
 }
