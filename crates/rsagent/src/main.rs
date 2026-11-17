@@ -18,7 +18,7 @@ use futures::future::FutureExt;
 use rsagent_agent::{select_builtin_tools, Agent, AgentEvent, Approver, PathFence, Tool};
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
-    StreamOptions,
+    StreamOptions, ThinkingLevel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -116,6 +116,10 @@ struct Cli {
     /// Disable the `bash` tool.
     #[arg(long)]
     no_bash: bool,
+
+    /// Extended-reasoning budget: off, minimal, low, medium, high, xhigh, or max.
+    #[arg(long, value_parser = parse_thinking, default_value = "off")]
+    thinking: ThinkingLevel,
 }
 
 #[tokio::main]
@@ -284,6 +288,7 @@ fn build_agent(
         api_key: cli.api_key.clone(),
         temperature: cli.temperature,
         max_tokens: cli.max_tokens,
+        thinking: cli.thinking,
         ..StreamOptions::default()
     };
 
@@ -331,6 +336,22 @@ fn choose_tools(cli: &Cli, palette: Palette) -> Vec<Box<dyn Tool>> {
         );
     }
     tools
+}
+
+/// Parse a `--thinking` level into a [`ThinkingLevel`].
+fn parse_thinking(value: &str) -> Result<ThinkingLevel, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "off" => Ok(ThinkingLevel::Off),
+        "minimal" => Ok(ThinkingLevel::Minimal),
+        "low" => Ok(ThinkingLevel::Low),
+        "medium" => Ok(ThinkingLevel::Medium),
+        "high" => Ok(ThinkingLevel::High),
+        "xhigh" => Ok(ThinkingLevel::XHigh),
+        "max" => Ok(ThinkingLevel::Max),
+        other => Err(format!(
+            "unknown thinking level `{other}` (expected off, minimal, low, medium, high, xhigh, or max)"
+        )),
+    }
 }
 
 /// Print the REPL's slash-command help.

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::event::{ErrorReason, StreamEvent};
 use crate::message::{AssistantMessage, ContentBlock, Context, Message};
 use crate::provider::{Auth, EventStream, Provider, StreamOptions};
-use crate::types::{now_millis, Model, StopReason, Usage};
+use crate::types::{now_millis, Model, StopReason, ThinkingLevel, Usage};
 
 /// An `OpenAI` Chat Completions-compatible provider.
 #[derive(Debug)]
@@ -305,8 +305,24 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
     if let Some(max_tokens) = options.max_tokens {
         body["max_tokens"] = json!(max_tokens);
     }
+    if let Some(effort) = openai_reasoning_effort(options.thinking) {
+        body["reasoning_effort"] = json!(effort);
+    }
 
     body
+}
+
+/// Map a [`ThinkingLevel`] to an OpenAI `reasoning_effort` value, if any.
+///
+/// OpenAI has no `xhigh`/`max`, so those levels saturate at `high`.
+fn openai_reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal => Some("minimal"),
+        ThinkingLevel::Low => Some("low"),
+        ThinkingLevel::Medium => Some("medium"),
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => Some("high"),
+    }
 }
 
 /// Incremental parser turning `OpenAI` streaming chunks into normalized [`StreamEvent`]s.
@@ -619,5 +635,42 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read_file");
         assert_eq!(calls[0].2["path"], "a.txt");
+    }
+
+    #[test]
+    fn maps_thinking_levels_to_reasoning_effort() {
+        let model = test_model();
+        let context = Context::default();
+        let body_for = |level| {
+            let options = StreamOptions {
+                thinking: level,
+                ..StreamOptions::default()
+            };
+            build_request_body(&model, &context, &options)
+        };
+
+        assert!(body_for(ThinkingLevel::Off)
+            .get("reasoning_effort")
+            .is_none());
+        assert_eq!(
+            body_for(ThinkingLevel::Minimal)["reasoning_effort"],
+            json!("minimal")
+        );
+        assert_eq!(
+            body_for(ThinkingLevel::Low)["reasoning_effort"],
+            json!("low")
+        );
+        assert_eq!(
+            body_for(ThinkingLevel::Medium)["reasoning_effort"],
+            json!("medium")
+        );
+        assert_eq!(
+            body_for(ThinkingLevel::High)["reasoning_effort"],
+            json!("high")
+        );
+        assert_eq!(
+            body_for(ThinkingLevel::Max)["reasoning_effort"],
+            json!("high")
+        );
     }
 }

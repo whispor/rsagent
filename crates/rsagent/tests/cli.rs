@@ -53,6 +53,7 @@ fn help_lists_the_flags() {
         "--allow-outside-cwd",
         "--tools",
         "--no-bash",
+        "--thinking",
     ] {
         assert!(
             stdout.contains(flag),
@@ -72,6 +73,21 @@ fn unknown_tool_names_are_reported() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unknown tool in --tools: nope"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn an_invalid_thinking_level_is_rejected() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--thinking", "bogus"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(!output.status.success(), "an invalid level must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown thinking level"),
         "unexpected stderr: {stderr}"
     );
 }

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use crate::event::{ErrorReason, StreamEvent};
 use crate::message::{AssistantMessage, ContentBlock, Context, Message};
 use crate::provider::{Auth, EventStream, Provider, StreamOptions};
-use crate::types::{now_millis, Modality, Model, StopReason, Usage};
+use crate::types::{now_millis, Modality, Model, StopReason, ThinkingLevel, Usage};
 
 /// The Anthropic API version header value this provider sends.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -319,11 +319,32 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
             .collect();
         body["tools"] = Value::Array(tools);
     }
-    if let Some(temperature) = options.temperature {
+    // Extended thinking and a custom temperature are mutually exclusive on the
+    // Messages API: with thinking enabled, temperature must stay at its default.
+    // `budget_tokens` must be at least 1024 and strictly below `max_tokens`.
+    let thinking_budget = anthropic_thinking_budget(options.thinking)
+        .map(|budget| budget.min(max_tokens.saturating_sub(1)))
+        .filter(|budget| *budget >= 1_024);
+    if let Some(budget) = thinking_budget {
+        body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+    } else if let Some(temperature) = options.temperature {
         body["temperature"] = json!(temperature);
     }
 
     body
+}
+
+/// The Anthropic `budget_tokens` for a [`ThinkingLevel`], or `None` when thinking is off.
+fn anthropic_thinking_budget(level: ThinkingLevel) -> Option<u32> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal => Some(1_024),
+        ThinkingLevel::Low => Some(2_048),
+        ThinkingLevel::Medium => Some(4_096),
+        ThinkingLevel::High => Some(8_192),
+        ThinkingLevel::XHigh => Some(16_384),
+        ThinkingLevel::Max => Some(32_768),
+    }
 }
 
 fn stop_reason_from_anthropic(reason: Option<&str>) -> StopReason {
@@ -669,5 +690,40 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read_file");
         assert_eq!(calls[0].2["path"], "a.txt");
+    }
+
+    #[test]
+    fn maps_thinking_levels_to_a_budget_below_max_tokens() {
+        let model = test_model();
+        let context = Context::default();
+        let body_for = |level, max_tokens| {
+            let options = StreamOptions {
+                thinking: level,
+                max_tokens: Some(max_tokens),
+                temperature: Some(0.5),
+                ..StreamOptions::default()
+            };
+            build_request_body(&model, &context, &options)
+        };
+
+        // Off: no thinking block, temperature preserved.
+        let body = body_for(ThinkingLevel::Off, 8_192);
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["temperature"], json!(0.5));
+
+        // Enabled: a thinking block appears and temperature is dropped.
+        let body = body_for(ThinkingLevel::Medium, 8_192);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["thinking"]["budget_tokens"], json!(4_096));
+        assert!(body.get("temperature").is_none());
+
+        // The budget is capped strictly below `max_tokens`.
+        let body = body_for(ThinkingLevel::Max, 2_048);
+        assert_eq!(body["thinking"]["budget_tokens"], json!(2_047));
+
+        // Too small for the 1024 minimum: thinking is dropped, temperature kept.
+        let body = body_for(ThinkingLevel::High, 1_024);
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["temperature"], json!(0.5));
     }
 }

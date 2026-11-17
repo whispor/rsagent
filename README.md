@@ -105,6 +105,7 @@ A line starting with `/` is a command rather than a prompt:
 | `--max-turns <N>` | | Maximum model turns in a single run (default `50`). |
 | `--temperature <F>` | | Sampling temperature (provider default when unset). |
 | `--max-tokens <N>` | | Maximum tokens to generate per response (provider default when unset). |
+| `--thinking <LEVEL>` | | Extended-reasoning budget: `off` (default), `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `-y, --yes` | | Auto-approve every tool call. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
 | `--continue` | | Resume the default session file (`.rsagent-session.json`). |
@@ -224,6 +225,11 @@ output and log files stay clean.
   separated from its result; a `ContextCompacted` event reports how many messages were
   dropped.
 - The `bash` tool is not sandboxed; approval prompts are the only guardrail.
+- `--thinking` is translated per protocol: OpenAI-compatible endpoints get
+  `reasoning_effort` (`xhigh`/`max` saturate at `high`), while Anthropic gets an enabled
+  `thinking` block with a `budget_tokens` derived from the level (capped below
+  `max_tokens`). With thinking enabled Anthropic requires the default temperature, so a
+  `--temperature` is dropped in that case.
 
 ## License
 
