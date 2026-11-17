@@ -12,6 +12,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::glob::glob_match;
+use crate::html::html_to_text;
 use crate::tool::{Tool, ToolContext, ToolResult};
 
 /// Directory names that recursive tools never descend into.
@@ -468,6 +469,129 @@ impl Tool for GlobTool {
     }
 }
 
+/// Fetch a URL over HTTP(S) and return its content as text.
+///
+/// HTML bodies are reduced to plain text; anything else is returned as-is. This is the
+/// only tool that sends a request to an arbitrary external host — a network egress path
+/// that would otherwise bypass the `bash` approval gate — so it requires approval, and
+/// the prompt shows the exact URL.
+#[derive(Debug)]
+pub struct WebFetchTool {
+    client: reqwest::Client,
+    max_bytes: usize,
+}
+
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("rsagent/", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+        WebFetchTool {
+            client,
+            max_bytes: 1_048_576,
+        }
+    }
+}
+
+impl WebFetchTool {
+    /// Create a fetch tool with the default client and size cap.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl Tool for WebFetchTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "webfetch",
+            "Fetch a URL over HTTP(S) and return its content as text. HTML is converted to plain text. Requires approval.",
+            object_schema(
+                &json!({
+                    "url": { "type": "string", "description": "Absolute http(s) URL to fetch" },
+                }),
+                &["url"],
+            ),
+        )
+    }
+
+    fn label(&self) -> String {
+        "Fetch".to_string()
+    }
+
+    fn requires_approval(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        args: Value,
+        _context: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        let raw = required_str(&args, "url")?;
+        let url =
+            reqwest::Url::parse(&raw).map_err(|error| format!("invalid URL `{raw}`: {error}"))?;
+        match url.scheme() {
+            "http" | "https" => {}
+            other => {
+                return Err(format!(
+                    "unsupported URL scheme `{other}` (only http and https are allowed)"
+                ))
+            }
+        }
+
+        let response = self
+            .client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|error| format!("request to {url} failed: {error}"))?;
+
+        let status = response.status();
+        let is_html = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("html"));
+
+        let body = read_capped(response, self.max_bytes).await?;
+        if !status.is_success() {
+            let preview: String = body.chars().take(2_000).collect();
+            return Err(format!("HTTP {status} from {url}\n{preview}"));
+        }
+
+        let text = if is_html { html_to_text(&body) } else { body };
+        if text.trim().is_empty() {
+            return Ok(ToolResult::text(format!("(empty body from {url})")));
+        }
+        Ok(ToolResult::text(text))
+    }
+}
+
+/// Read a response body, stopping after `max_bytes` so a huge page cannot exhaust memory.
+async fn read_capped(mut response: reqwest::Response, max_bytes: usize) -> Result<String, String> {
+    let mut buffer: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("failed to read response body: {error}"))?
+    {
+        let remaining = max_bytes.saturating_sub(buffer.len());
+        if remaining == 0 {
+            break;
+        }
+        let take = remaining.min(chunk.len());
+        buffer.extend_from_slice(&chunk[..take]);
+        if take < chunk.len() {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
 /// Run a shell command in the working directory and return its combined output.
 ///
 /// The command is killed if it exceeds its timeout or the run is cancelled, so a
@@ -669,6 +793,7 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(ListDirTool),
         Box::new(SearchTool),
         Box::new(GlobTool),
+        Box::new(WebFetchTool::new()),
         Box::new(BashTool::new()),
     ]
 }

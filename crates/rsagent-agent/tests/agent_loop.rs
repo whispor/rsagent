@@ -448,3 +448,78 @@ async fn search_skips_build_and_vendor_directories() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn webfetch_rejects_non_http_schemes() {
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![("webfetch", json!({ "url": "file:///etc/passwd" }))]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent
+        .prompt("fetch a local file")
+        .await
+        .expect("prompt completes");
+
+    let failed = agent.messages().iter().find_map(|m| match m {
+        Message::ToolResult(r) if r.tool_name == "webfetch" => Some((
+            r.is_error,
+            r.content
+                .iter()
+                .filter_map(|block| block.as_text())
+                .collect::<String>(),
+        )),
+        _ => None,
+    });
+    let (is_error, text) = failed.expect("a webfetch result");
+    assert!(is_error, "a non-http scheme must fail");
+    assert!(text.contains("unsupported URL scheme"), "got: {text}");
+}
+
+#[tokio::test]
+async fn webfetch_returns_page_text_without_markup() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // A one-shot local HTTP server, so the test needs no external network.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+
+    tokio::spawn(async move {
+        let Ok((mut socket, _)) = listener.accept().await else {
+            return;
+        };
+        let mut request = [0u8; 1024];
+        let _ = socket.read(&mut request).await;
+        let body = "<html><body><h1>Hello</h1><script>secret()</script><p>World</p></body></html>";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = socket.flush().await;
+    });
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![(
+            "webfetch",
+            json!({ "url": format!("http://{addr}/") }),
+        )]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent
+        .prompt("fetch the page")
+        .await
+        .expect("prompt completes");
+
+    let result = tool_result_text(&agent, "webfetch");
+    assert!(result.contains("Hello"), "got: {result}");
+    assert!(result.contains("World"), "got: {result}");
+    assert!(
+        !result.contains("secret()"),
+        "script content must be dropped: {result}"
+    );
+}

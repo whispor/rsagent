@@ -13,9 +13,10 @@ futures.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
 async-trait.workspace = true
 
 [lints]

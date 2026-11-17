@@ -158,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
         model.provider,
         cli.cwd.display()
     );
-    println!("Type a prompt, or 'exit' to quit.\n");
+    println!("Type a prompt, or /help for commands ('exit' to quit).\n");
 
     run_repl(
         &mut agent,
@@ -266,6 +266,17 @@ fn build_agent(cli: &Cli, input: SharedInput) -> (Agent, Option<FauxProvider>, M
     (agent, faux_handle, model)
 }
 
+/// Print the REPL's slash-command help.
+fn print_repl_help() {
+    println!("可用命令：");
+    println!("  /help    显示本帮助");
+    println!("  /clear   清空当前会话记录（用 --session 时同步写回文件）");
+    println!("  /exit    退出（也可用 exit、quit）");
+    println!();
+    println!("其它输入会作为提示词发给模型。");
+    println!("工具调用需确认：y=允许一次，a=本会话后续全部允许，回车=拒绝。");
+}
+
 /// Read prompts from stdin and run the agent until the user quits.
 async fn run_repl(
     agent: &mut Agent,
@@ -286,8 +297,23 @@ async fn run_repl(
         if input_text.is_empty() {
             continue;
         }
-        if input_text == "exit" || input_text == "quit" {
+        if matches!(input_text, "exit" | "quit" | "/exit" | "/quit") {
             break;
+        }
+
+        if let Some(command) = input_text.strip_prefix('/') {
+            match command.trim() {
+                "help" => print_repl_help(),
+                "clear" => {
+                    let dropped = agent.messages().len();
+                    agent.load_messages(Vec::new());
+                    save_session(cli.session.as_deref(), agent);
+                    println!("\x1b[2m· 已清空会话记录（丢弃 {dropped} 条消息）\x1b[0m");
+                }
+                "" => {}
+                other => println!("\x1b[33m· 未知命令 /{other}，输入 /help 查看可用命令\x1b[0m"),
+            }
+            continue;
         }
 
         if let Some(faux) = faux {
@@ -586,6 +612,10 @@ impl Renderer {
                     "说明：只替换这一处文字，文件其它内容保持不变。".to_string(),
                 ]
             }
+            "webfetch" => vec![
+                format!("抓取网页：{}", arg_str(args, "url")),
+                "说明：这会向该网址发起网络请求，对方会看到这次访问。请确认网址可信。".to_string(),
+            ],
             other => vec![
                 format!("调用工具「{other}」"),
                 format!("参数：{}", compact(args)),
@@ -613,6 +643,7 @@ fn describe_action(tool_name: &str, args: &Value) -> String {
         "write_file" => format!("写入文件：{}", arg_str(args, "path")),
         "edit_file" => format!("修改文件：{}", arg_str(args, "path")),
         "bash" => format!("执行命令：{}", arg_str(args, "command")),
+        "webfetch" => format!("抓取网页：{}", arg_str(args, "url")),
         other => format!("{other} {}", compact(args)),
     }
 }
@@ -625,6 +656,7 @@ fn tool_display_name(tool_name: &str) -> &str {
         "edit_file" => "修改文件",
         "list_dir" => "查看目录",
         "bash" => "执行命令",
+        "webfetch" => "抓取网页",
         other => other,
     }
 }

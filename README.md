@@ -79,6 +79,14 @@ cargo run -p rsagent -- --model gpt-4o-mini
 > exit
 ```
 
+A line starting with `/` is a command rather than a prompt:
+
+| Command | Effect |
+| --- | --- |
+| `/help` | Show the command list. |
+| `/clear` | Forget the current transcript (also rewrites the `--session` file). |
+| `/exit` | Quit (also `exit`, `quit`). |
+
 ## CLI reference
 
 | Flag | Env | Description |
@@ -106,6 +114,7 @@ cargo run -p rsagent -- --model gpt-4o-mini
 | `list_dir` | no | List directory entries. |
 | `search` | no | Search files under a directory for a literal substring (`path:line: text`). |
 | `glob` | no | Find files by glob pattern (`*`, `?`, `**`), one path per line. |
+| `webfetch` | yes | Fetch an HTTP(S) URL and return it as text (HTML is converted). |
 | `write_file` | yes | Write a file, creating parent directories. |
 | `edit_file` | yes | Replace an exact string in a file. |
 | `bash` | yes | Run a shell command (killed after a timeout). |
@@ -113,6 +122,10 @@ cargo run -p rsagent -- --model gpt-4o-mini
 `search` and `glob` do not descend into build-output or vendor directories (`target`,
 `node_modules`, `.git`, `.venv`, `venv`, `__pycache__`), so matches are not buried
 under generated files. The directory you point them at is still searched.
+
+`webfetch` requires approval: it is the only tool that contacts an arbitrary external
+host, so the prompt shows the exact URL. It follows redirects, times out after 30s, and
+stops reading after 1 MiB. Only `http` and `https` URLs are allowed.
 
 Tools marked **yes** require approval before they run. In interactive mode the agent
 explains, in plain language, exactly what it is about to do and waits for your answer:

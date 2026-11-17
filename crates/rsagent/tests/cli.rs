@@ -113,3 +113,37 @@ fn a_zero_turn_limit_is_rejected() {
         "a zero turn limit must be rejected"
     );
 }
+
+#[test]
+fn repl_handles_slash_commands() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = rsagent()
+        .arg("--faux")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rsagent");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(b"/help\nhello\n/clear\nexit\n")
+        .expect("write to stdin");
+
+    let output = child.wait_with_output().expect("wait for rsagent");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("可用命令"), "help output missing: {stdout}");
+    assert!(
+        stdout.contains("(faux) you said: hello"),
+        "the prompt was not answered: {stdout}"
+    );
+    assert!(
+        stdout.contains("已清空会话记录"),
+        "/clear output missing: {stdout}"
+    );
+}
