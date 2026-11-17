@@ -27,8 +27,8 @@ pub use error::AgentError;
 pub use event::AgentEvent;
 pub use source::{SourceHealth, SourceKind, ToolSource};
 pub use sources::{
-    BuiltinSource, LocalSource, McpHttpSource, McpStdioSource, SkillSource, BUILTIN_SOURCE_ID,
-    MCP_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    BuiltinSource, LocalSource, McpHttpSource, McpStdioSource, SkillSource, WebSource,
+    WebSourceConfig, BUILTIN_SOURCE_ID, MCP_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 pub use tool::{PathFence, Tool, ToolContext, ToolResult};
 pub use tools::{

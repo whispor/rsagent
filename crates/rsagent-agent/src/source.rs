@@ -9,8 +9,8 @@ use crate::tool::Tool;
 
 /// What kind of source a [`ToolSource`] is.
 ///
-/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `web`. It is added later —
-/// declaring a variant with no implementation would be code without a caller.
+/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 names the kinds, and new ones are
+/// added as variants so downstream `match`es keep compiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceKind {
@@ -28,6 +28,8 @@ pub enum SourceKind {
     McpHttp,
     /// A folder of scripts declared by a `skill.toml` manifest.
     Skill,
+    /// A single HTTP endpoint wrapped as one tool.
+    Web,
 }
 
 impl SourceKind {
@@ -39,6 +41,7 @@ impl SourceKind {
             SourceKind::McpStdio => "mcp-stdio",
             SourceKind::McpHttp => "mcp-http",
             SourceKind::Skill => "skill",
+            SourceKind::Web => "web",
         }
     }
 }
