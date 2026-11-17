@@ -173,6 +173,19 @@ kind = "skill"            # a folder of scripts declared by a manifest
 id = "team"
 path = "./skills/team"    # holds SKILL.md and skill.toml
 prefix = "team"           # tools appear to the model as team__<name>
+
+[[tools.sources]]
+kind = "web"              # one HTTP endpoint wrapped as one tool
+id = "weather"
+url = "https://api.example.com/weather"
+method = "GET"            # GET/HEAD: args become query params; others: a JSON body
+name = "get_weather"      # the tool name (default: the source id)
+description = "Look up the weather for a city."
+requires_approval = false
+[tools.sources.parameters] # JSON Schema for the model
+type = "object"
+properties.city = { type = "string" }
+required = ["city"]
 ```
 
 With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
@@ -292,6 +305,31 @@ script may do anything. Because each call is its own process (not one long-lived
 these tools are **not** sequential, and each source has the same circuit breaker as the
 others: three consecutive connection-class failures (cannot start, timeout, non-zero exit,
 non-JSON output) take it out of the tool list until a cooldown passes.
+
+#### The `web` source
+
+A `web` source wraps **one HTTP endpoint as one tool** — the lightest way to reach an
+existing HTTP API, with no server changes. The model's arguments become the request:
+
+- `GET` (the default) and `HEAD` send them as **query parameters** — a string verbatim,
+  anything else as JSON, and a `null` dropped so an omitted optional field stays omitted;
+- every other method sends the arguments object as the **JSON request body**.
+
+`headers` are added to every request (how you supply an `Authorization` token). The
+response body becomes the tool's result; when it parses as JSON it is also kept as
+structured `details` for the UI. `name`, `description`, and `parameters` describe the tool
+to the model — `name` defaults to the source id, `parameters` to an empty object.
+
+`requires_approval` defaults to `true`: a `GET` on a read-only endpoint can opt out, but
+anything else may change state on the far side. `timeout_secs` (default 60) bounds each
+request.
+
+The failure split differs from the subprocess sources on purpose. A **transport** failure
+(the endpoint is unreachable, a request times out) is connection-class and trips the
+breaker. An **HTTP response is not** — once the server has answered, it is reachable, so a
+`4xx` or `5xx` is a business failure that is reported to the model as an error but leaves
+the breaker closed. This keeps a `400` caused by bad arguments from taking the whole
+source out of the tool list (see decision D9).
 
 ## CLI reference
 

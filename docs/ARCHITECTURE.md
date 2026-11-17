@@ -200,14 +200,14 @@ Four seams, all plain traits. Implement one and register it; the core does not c
 
 There is a fifth seam one level up, at **assembly time** rather than in the loop:
 [`ToolSource`](../crates/rsagent-agent/src/source.rs) groups tools (the compiled-in set,
-a local program, and an MCP server over stdio or HTTP) and is flattened into the flat
-`Vec<Box<dyn Tool>>` that `Agent` still takes. The loop never learns sources exist
-(decision D2, [`EXTENSIBILITY.md` §3.1](EXTENSIBILITY.md)).
+a local program, an MCP server over stdio or HTTP, a skill folder, a web endpoint) and is
+flattened into the flat `Vec<Box<dyn Tool>>` that `Agent` still takes. The loop never
+learns sources exist (decision D2, [`EXTENSIBILITY.md` §3.1](EXTENSIBILITY.md)).
 
 还有第五处缝，位置在循环之上、属于**装配期**：
 [`ToolSource`](../crates/rsagent-agent/src/source.rs) 把工具分组（内置集、本地程序、
-以及 stdio 或 HTTP 上的 MCP 服务），再由 `ToolCatalog` 展平成 `Agent` 仍然接收的扁平
-`Vec<Box<dyn Tool>>`。循环始终不知道"来源"的存在（决策 D2，见
+stdio 或 HTTP 上的 MCP 服务、skill 文件夹、web 端点），再由 `ToolCatalog` 展平成 `Agent`
+仍然接收的扁平 `Vec<Box<dyn Tool>>`。循环始终不知道"来源"的存在（决策 D2，见
 [`EXTENSIBILITY.md` §3.1](EXTENSIBILITY.md)）。
 
 Each example is a real, compilable program:
@@ -260,14 +260,14 @@ If you are learning the codebase, read in this order — it follows the data flo
 8. `rsagent-agent/src/source.rs` + `catalog.rs` — how tools are grouped into *sources* and
    flattened at assembly time; `breaker.rs` is the per-source circuit breaker, and
    `sources/` holds the live sources (`builtin`, `local`, `mcp-stdio`, `mcp-http`,
-   `skill`) plus `mcp.rs` (the protocol payloads the two MCP transports share) and
+   `skill`, `web`) plus `mcp.rs` (the protocol payloads the two MCP transports share) and
    `subprocess.rs` (the spawn/timeout/reply runner the two script sources share).
 9. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` parses the config file.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 162 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 173 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 162 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 173 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。
