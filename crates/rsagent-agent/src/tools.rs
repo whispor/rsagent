@@ -257,7 +257,7 @@ impl Tool for EditFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "edit_file",
-            "Replace an exact string in a file with a new string. Fails if the old string is not found.",
+            "Replace an exact string in a file with a new string. Fails if the old string is not found, or if it appears more than once and `replace_all` is not set — in that case include more surrounding context to make it unique.",
             object_schema(
                 &json!({
                     "path": { "type": "string", "description": "File path" },
@@ -301,13 +301,21 @@ impl Tool for EditFileTool {
             .await
             .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
 
-        if !original.contains(&old_string) {
+        let occurrences = original.matches(&old_string).count();
+        if occurrences == 0 {
             return Err(format!("old_string not found in {}", resolved.display()));
+        }
+        // An ambiguous match almost always means the model meant a different site, so
+        // refuse rather than silently editing the first one. `replace_all` opts in.
+        if occurrences > 1 && !replace_all {
+            return Err(format!(
+                "old_string occurs {occurrences} times in {}; include more surrounding context to make it unique, or pass replace_all to replace every occurrence",
+                resolved.display()
+            ));
         }
 
         let (updated, count) = if replace_all {
-            let count = original.matches(&old_string).count();
-            (original.replace(&old_string, &new_string), count)
+            (original.replace(&old_string, &new_string), occurrences)
         } else {
             (original.replacen(&old_string, &new_string, 1), 1)
         };

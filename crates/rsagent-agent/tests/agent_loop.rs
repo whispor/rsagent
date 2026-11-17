@@ -679,3 +679,93 @@ async fn read_file_reaches_outside_when_the_fence_is_off() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[tokio::test]
+async fn edit_file_rejects_an_ambiguous_match() {
+    let dir = temp_dir("edit-ambiguous-it");
+    std::fs::write(dir.join("f.txt"), "foo\nbar\nfoo\n").expect("write file");
+    let path = dir.join("f.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![(
+            "edit_file",
+            json!({ "path": path, "old_string": "foo", "new_string": "baz" }),
+        )]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent.prompt("edit").await.expect("prompt completes");
+
+    let failed = agent.messages().iter().find_map(|m| match m {
+        Message::ToolResult(r) if r.tool_name == "edit_file" => Some((
+            r.is_error,
+            r.content
+                .iter()
+                .filter_map(|block| block.as_text())
+                .collect::<String>(),
+        )),
+        _ => None,
+    });
+    let (is_error, text) = failed.expect("an edit_file result");
+    assert!(is_error, "an ambiguous match must fail");
+    assert!(text.contains("occurs 2 times"), "got: {text}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f.txt")).expect("read file"),
+        "foo\nbar\nfoo\n",
+        "the file must be left untouched"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn edit_file_replaces_every_occurrence_when_asked() {
+    let dir = temp_dir("edit-all-it");
+    std::fs::write(dir.join("f.txt"), "foo\nbar\nfoo\n").expect("write file");
+    let path = dir.join("f.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![(
+            "edit_file",
+            json!({ "path": path, "old_string": "foo", "new_string": "baz", "replace_all": true }),
+        )]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent.prompt("edit").await.expect("prompt completes");
+
+    let result = tool_result_text(&agent, "edit_file");
+    assert!(result.contains("2 occurrence"), "got: {result}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f.txt")).expect("read file"),
+        "baz\nbar\nbaz\n"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn edit_file_replaces_a_unique_match() {
+    let dir = temp_dir("edit-unique-it");
+    std::fs::write(dir.join("f.txt"), "alpha\nbeta\ngamma\n").expect("write file");
+    let path = dir.join("f.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![(
+            "edit_file",
+            json!({ "path": path, "old_string": "beta", "new_string": "BETA" }),
+        )]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent.prompt("edit").await.expect("prompt completes");
+
+    let result = tool_result_text(&agent, "edit_file");
+    assert!(result.contains("Replaced 1 occurrence"), "got: {result}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f.txt")).expect("read file"),
+        "alpha\nBETA\ngamma\n"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
