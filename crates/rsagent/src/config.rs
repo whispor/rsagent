@@ -39,7 +39,7 @@ pub(crate) struct Tools {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceConfig {
-    /// The source kind: `builtin`, `local`, `mcp-stdio`, `mcp-http`, or `skill`
+    /// The source kind: `builtin`, `local`, `mcp-stdio`, `mcp-http`, `skill`, or `web`
     /// (`docs/EXTENSIBILITY.md` §3.2).
     pub kind: String,
     /// A stable id, unique among sources.
@@ -63,13 +63,28 @@ pub(crate) struct SourceConfig {
     /// The skill folder (`skill` sources): a directory holding `SKILL.md` and `skill.toml`.
     #[serde(default)]
     pub path: Option<String>,
-    /// The endpoint URL (`mcp-http` sources).
+    /// The endpoint URL (`mcp-http` and `web` sources).
     #[serde(default)]
     pub url: Option<String>,
-    /// Extra request headers, e.g. `Authorization` (`mcp-http` sources).
+    /// Extra request headers, e.g. `Authorization` (`mcp-http` and `web` sources).
     #[serde(default)]
     pub headers: Option<BTreeMap<String, String>>,
-    /// Per-call timeout in seconds (local and MCP sources; default 60).
+    /// The HTTP method (`web` sources; default `GET`).
+    #[serde(default)]
+    pub method: Option<String>,
+    /// The tool name the model sees (`web` sources; default: the source id).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// A one-line description for the model (`web` sources).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The JSON Schema the model must satisfy (`web` sources; default: an empty object).
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    /// Whether a call needs the user's approval first (`web` sources; default `true`).
+    #[serde(default)]
+    pub requires_approval: Option<bool>,
+    /// Per-call timeout in seconds (local, MCP, and `web` sources; default 60).
     #[serde(default)]
     pub timeout_secs: Option<u64>,
 }
@@ -192,6 +207,43 @@ mod tests {
         assert_eq!(source.kind, "skill");
         assert_eq!(source.path.as_deref(), Some("./skills/team"));
         assert_eq!(source.prefix.as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn a_web_source_parses_its_endpoint_and_tool() {
+        let config = Config::parse(
+            r#"
+            [[tools.sources]]
+            kind = "web"
+            id = "weather"
+            url = "https://api.example.com/weather"
+            method = "POST"
+            name = "get_weather"
+            description = "Look up the weather."
+            requires_approval = false
+            headers = { Authorization = "Bearer token" }
+            [tools.sources.parameters]
+            type = "object"
+            properties.city = { type = "string" }
+            required = ["city"]
+        "#,
+        )
+        .expect("parse");
+
+        let source = &config.tools.sources[0];
+        assert_eq!(source.kind, "web");
+        assert_eq!(
+            source.url.as_deref(),
+            Some("https://api.example.com/weather")
+        );
+        assert_eq!(source.method.as_deref(), Some("POST"));
+        assert_eq!(source.name.as_deref(), Some("get_weather"));
+        assert_eq!(source.description.as_deref(), Some("Look up the weather."));
+        assert_eq!(source.requires_approval, Some(false));
+        assert_eq!(
+            source.parameters.as_ref().expect("parameters")["required"],
+            serde_json::json!(["city"])
+        );
     }
 
     #[test]

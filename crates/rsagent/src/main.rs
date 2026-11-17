@@ -19,7 +19,7 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpHttpSource, McpStdioSource,
-    PathFence, SkillSource, SourceEntry, SourceHealth, ToolCatalog,
+    PathFence, SkillSource, SourceEntry, SourceHealth, ToolCatalog, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -491,8 +491,36 @@ async fn build_source(
             let source = SkillSource::new(spec.id.clone(), path, timeout)?;
             Ok(Box::new(source))
         }
+        "web" => {
+            let url = spec
+                .url
+                .as_deref()
+                .ok_or_else(|| "a `web` source needs `url`".to_string())?;
+            let mut config = WebSourceConfig::new(url);
+            if let Some(name) = spec.name.clone() {
+                config.name = name;
+            }
+            if let Some(description) = spec.description.clone() {
+                config.description = description;
+            }
+            if let Some(parameters) = spec.parameters.clone() {
+                config.parameters = parameters;
+            }
+            if let Some(method) = spec.method.clone() {
+                config.method = method;
+            }
+            if let Some(headers) = spec.headers.clone() {
+                config.headers = headers.into_iter().collect();
+            }
+            if let Some(requires_approval) = spec.requires_approval {
+                config.requires_approval = requires_approval;
+            }
+            let timeout = spec.timeout_secs.map(Duration::from_secs);
+            let source = WebSource::new(spec.id.clone(), config, timeout)?;
+            Ok(Box::new(source))
+        }
         other => Err(format!(
-            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, `mcp-http`, or `skill`)"
+            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, `mcp-http`, `skill`, or `web`)"
         )),
     }
 }

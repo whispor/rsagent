@@ -586,6 +586,36 @@ fn a_config_driven_skill_source_is_listed() {
 }
 
 #[test]
+fn a_config_driven_web_source_is_listed() {
+    let dir = temp_dir("config-web");
+    // No connection is made at load time, so the URL need not be live.
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"web\"\nid = \"weather\"\nurl = \"https://api.example.com/weather\"\nname = \"get_weather\"\nprefix = \"wx\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[web]"),
+        "the source kind is missing: {stdout}"
+    );
+    assert!(
+        listed_tools(&stdout).contains(&"wx__get_weather".to_string()),
+        "the prefixed web tool is missing: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn an_unreachable_mcp_http_source_is_reported_and_skipped() {
     let dir = temp_dir("config-mcp-http");
     // Port 1 on loopback is never listening, so the handshake fails at load time.
