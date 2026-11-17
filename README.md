@@ -152,6 +152,13 @@ command = "./scripts/release-tool"
 args = ["--verbose"]      # fixed args, before the phase flag
 timeout_secs = 60         # per call; default 60
 prefix = "rel"            # optional: tools appear to the model as rel__<name>
+
+[[tools.sources]]
+kind = "mcp-stdio"        # a Model Context Protocol server, over stdio
+id = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+prefix = "fs"             # MCP tool names are often generic, so a prefix is wise
 ```
 
 With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
@@ -190,6 +197,30 @@ three consecutive *connection-class* failures (cannot start, timeout, non-zero e
 non-JSON output) it is taken out of the tool list and probed again after a cooldown. A
 well-formed `{"error": ...}` reply is a *business* failure — the program is working, so it
 does not trip the breaker.
+
+#### The `mcp-stdio` source (Model Context Protocol)
+
+An `mcp-stdio` source is a **Model Context Protocol** server spoken to over stdio — the
+same wire format most MCP servers already use, so an existing server works with no
+adapter. `rsagent` launches `command args...` once, keeps the process alive for the whole
+run, and speaks JSON-RPC 2.0 with it: one JSON message per line on stdout, UTF-8, with all
+logging expected on stderr (stdout carries protocol traffic only).
+
+The handshake follows the MCP lifecycle: `initialize` (the client sends its
+`protocolVersion`, `capabilities`, and `clientInfo`) → the server echoes a version plus its
+own `capabilities`/`serverInfo` → the client sends `notifications/initialized`. Tools are
+then discovered with `tools/list` (following `nextCursor` pagination to the end) and
+invoked with `tools/call`. A tool's `inputSchema` becomes its parameter schema, and
+`annotations.readOnlyHint` sets `requires_approval` — a read-only tool skips the approval
+prompt, anything else defaults to *requiring* it, consistent with the `local` source.
+
+`timeout_secs` (default 60) bounds each request. If a call fails at the transport level
+(the process died, output was not JSON, a request timed out) the session is dropped and
+reconnected on the next call; `mcp-stdio` shares the same per-source circuit breaker as
+`local`, so a server that cannot be reached is taken out of the tool list after three
+consecutive connection-class failures rather than retried forever. The child is
+`kill_on_drop`-ed, so it does not outlive the agent. Because MCP tool names are generic
+(`read`, `list`, …), giving the source a `prefix` is strongly recommended.
 
 ## CLI reference
 

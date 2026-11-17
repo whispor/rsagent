@@ -41,7 +41,7 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | --- | --- | --- |
 | 工具执行 | `Tool` trait（`crates/rsagent-agent/src/tool.rs`），`ToolSpec`（给模型）与执行分离 | — |
 | 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` 仍是唯一入口；`ToolCatalog` 在装配期把来源展开成该扁平列表 | — |
-| 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` 与 `LocalSource`（`sources/`）两种实现 | `mcp-stdio` / `mcp-http` / `skill` / `web` 待 P2 |
+| 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` / `LocalSource` / `McpStdioSource`（`sources/`）三种实现 | `mcp-http` / `skill` / `web` 待 P2 |
 | 提供商 | `Provider` trait + `Models::register`（`rsagent-ai/src/provider.rs`） | — |
 | 审批 | `Approver` trait + `Agent::with_approver` | 语义未文档化（默认 `AllowAll`） |
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
@@ -169,19 +169,19 @@ at assembly time by `ToolCatalog`; the loop never learns where tools come from.
 | --- | --- | --- | --- | --- | --- |
 | `builtin` | `read_file` … `bash` | 同进程 | — | 按工具 | ✅ **已实现** |
 | `local` | 项目自带的脚本/二进制 | 子进程 stdin/stdout（JSON 行） | 检查可执行文件存在 | ✅ | ✅ **已实现** |
-| `mcp-stdio` | `@modelcontextprotocol/server-filesystem` | 子进程 + MCP 协议 | 配置即安装（`npx`/`uvx` 按需拉取） | 按工具注解 | 待 P2 |
+| `mcp-stdio` | `@modelcontextprotocol/server-filesystem` | 长驻子进程 + JSON-RPC 2.0 over stdio | 配置即安装（`npx`/`uvx` 按需拉取） | 按工具注解 | ✅ **已实现** |
 | `mcp-http` | 远端 MCP 服务 | HTTP + SSE | 配置即安装（写 URL + 令牌） | 按工具注解 | 待 P2 |
 | `skill` | 一个文件夹 + `SKILL.md` + 脚本 | 文件夹扫描 → 展开为工具 | 目录存在性检查 | ✅ | 待 P2 |
 | `web` | 把某个 HTTP 端点包装成工具 | HTTP | 配置即安装 | ✅ | 待 P2 |
 
 **一种对接方式，多种来源。** 新增来源类型 = 实现 `ToolSource` 一次，而不是改循环。
-`SourceKind` 是 `#[non_exhaustive]`，P2 的四种来源会作为新变体加入，不影响下游。
+`SourceKind` 是 `#[non_exhaustive]`，P2 的其余三种来源会作为新变体加入，不影响下游。
 
 ### 3.3 配置 · Configuration
 
 One file, `rsagent.toml`, project-local, with CLI flags overriding it. **已实现**
-（`crates/rsagent/src/config.rs`）；当前只解析 `builtin` 与 `local` 两种 `kind`，下面
-示例里的 `mcp-stdio` / `skill` 是 P2 的目标形态。
+（`crates/rsagent/src/config.rs`）；当前解析 `builtin` / `local` / `mcp-stdio` 三种
+`kind`，下面示例里的 `skill` 是 P2 的目标形态。
 
 ```toml
 # rsagent.toml
@@ -191,7 +191,7 @@ id = "core"
 exclude = ["bash"]              # 与 --no-bash 等价
 
 [[tools.sources]]
-kind = "mcp-stdio"              # ← P2
+kind = "mcp-stdio"              # ← 已实现
 id = "filesystem"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -377,7 +377,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 
 | 项 | 内容 |
 | --- | --- |
-| P2-1 | `mcp-stdio` 来源（MCP 协议：`initialize` / `tools/list` / `tools/call`） |
+| P2-1 | ✅ `mcp-stdio` 来源（MCP 协议：`initialize` / `tools/list` / `tools/call`） |
 | P2-2 | `mcp-http` 来源 |
 | P2-3 | `skill` 来源（文件夹 + `SKILL.md` → 工具） |
 | P2-4 | `web` 来源（HTTP 端点 → 工具） |
