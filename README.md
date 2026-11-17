@@ -132,6 +132,65 @@ This repository ships one at its root as an example.
 Precedence is `--system` > `AGENTS.md` > built-in prompt: `--system` replaces the prompt
 outright, and `AGENTS.md` is *added to* the built-in prompt rather than replacing it.
 
+### Tool sources (`rsagent.toml`)
+
+Tools are grouped into **sources**. The built-in tools (`read_file` … `bash`) are one
+source; a project can add more without touching the loop. Sources are declared in a
+project-local `rsagent.toml`, found at or above the working directory:
+
+```toml
+# rsagent.toml
+[[tools.sources]]
+kind = "builtin"          # the compiled-in tool set
+id = "core"
+exclude = ["bash"]        # same as --no-bash
+
+[[tools.sources]]
+kind = "local"            # a program run as a subprocess
+id = "release"
+command = "./scripts/release-tool"
+args = ["--verbose"]      # fixed args, before the phase flag
+timeout_secs = 60         # per call; default 60
+prefix = "rel"            # optional: tools appear to the model as rel__<name>
+```
+
+With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
+A file that exists but does not parse is reported on stderr, never silently ignored; a
+single source that fails to load is reported and **skipped**, so one broken source cannot
+take the whole agent down. `--list-tools` prints every source, its health, and the
+assembled tools.
+
+The precedence is **CLI flags > environment > `rsagent.toml` > built-in defaults**:
+`--tools` replaces a built-in source's `only`, and `--no-bash` adds to its `exclude`.
+
+#### The `local` source protocol (version 1)
+
+A `local` source is any program that speaks a small JSON protocol. `rsagent` invokes it
+twice, appending a phase flag after `args`:
+
+- `program <args...> --describe` prints one JSON object on stdout:
+
+  ```json
+  {"protocol": 1, "tools": [
+    {"name": "release", "description": "Cut a release.",
+     "parameters": {"type": "object", "properties": {}},
+     "requires_approval": true}
+  ]}
+  ```
+
+- `program <args...> --call` reads one JSON object on stdin
+  (`{"tool": "release", "arguments": {...}}`) and prints one JSON object on stdout:
+  `{"content": "..."}` (success) or `{"error": "..."}` (failure). `content` may be any
+  JSON value; a string is used verbatim, anything else is rendered as compact JSON.
+
+`requires_approval` defaults to `true`: an arbitrary program may do anything, so it must
+opt *out* of the approval prompt, never accidentally into it. Tools from a `local` source
+run one at a time (never concurrently), and each source has a circuit breaker: after
+three consecutive *connection-class* failures (cannot start, timeout, non-zero exit,
+non-JSON output) it is taken out of the tool list and probed again after a cooldown. A
+well-formed `{"error": ...}` reply is a *business* failure — the program is working, so it
+does not trip the breaker.
+
 ## CLI reference
 
 | Flag | Env | Description |
@@ -155,7 +214,7 @@ outright, and `AGENTS.md` is *added to* the built-in prompt rather than replacin
 | `--allow-outside-cwd` | | Let read tools access paths outside the working directory. |
 | `--tools <LIST>` | | Enable only the named tools (comma-separated); default is all built-ins. |
 | `--no-bash` | | Disable the `bash` tool. |
-| `--list-tools` | | List the built-in tools and whether each needs approval, then exit. |
+| `--list-tools` | | List the tool sources and the assembled tools, then exit. |
 | `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools
@@ -261,7 +320,9 @@ rsagent --print "summarize this repo" > answer.md
 
 Environment variables are read from the process environment. A `.env` file in the
 working directory is loaded at startup (simple `KEY=VALUE` lines; existing
-environment variables win).
+environment variables win). A project-local `rsagent.toml` configures the tool sources
+(see [Tool sources](#tool-sources-rsagenttoml)); the overall precedence is
+**CLI flags > environment > `rsagent.toml` > built-in defaults**.
 
 | Variable | Purpose |
 | --- | --- |

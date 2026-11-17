@@ -40,15 +40,15 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | 关注点 · Concern | 现状 · Current | 缺口 · Gap |
 | --- | --- | --- |
 | 工具执行 | `Tool` trait（`crates/rsagent-agent/src/tool.rs`），`ToolSpec`（给模型）与执行分离 | — |
-| 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` | 只能是一坨扁平列表，**无法分类、单独启停、健康检查** |
-| 工具来源 | `builtin_tools()` 硬编码 8 个；`select_builtin_tools(only, exclude)` 做白/黑名单 | 没有"来源"这一层，MCP/Skill 无处安放 |
+| 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` 仍是唯一入口；`ToolCatalog` 在装配期把来源展开成该扁平列表 | — |
+| 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` 与 `LocalSource`（`sources/`）两种实现 | `mcp-stdio` / `mcp-http` / `skill` / `web` 待 P2 |
 | 提供商 | `Provider` trait + `Models::register`（`rsagent-ai/src/provider.rs`） | — |
 | 审批 | `Approver` trait + `Agent::with_approver` | 语义未文档化（默认 `AllowAll`） |
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
-| 平台差异 | 仅 `BashTool` 内两处 `#[cfg(windows)]`（`cmd /C` vs `sh -c`） | 差异散落在业务代码里，未集中 |
-| CI | 只跑 `ubuntu-latest` | 无 Windows / macOS 验证 |
-| 配置 | CLI 参数 + 环境变量 + `.env` | 无项目配置文件、无优先级说明 |
-| 项目指令 | 无 | 无 `AGENTS.md` 等约定文件 |
+| 平台差异 | ✅ 收敛到 `platform.rs`（工作区唯一 `#[cfg]`） | — |
+| CI | ✅ 三平台矩阵（ubuntu / windows / macos） | — |
+| 配置 | ✅ `rsagent.toml`（`crates/rsagent/src/config.rs`），优先级 CLI > env > project > 默认 | 用户级配置待补 |
+| 项目指令 | ✅ `AGENTS.md` 并入 system prompt（`main.rs`） | — |
 | 机器可读输出 | 无 | 无 `--json` |
 | 稳定性标记 | `AgentEvent` / `StreamEvent` / `ErrorReason` 已 `#[non_exhaustive]` | 无公开 API 清单与 semver 承诺 |
 
@@ -96,7 +96,7 @@ Adding anything follows four steps. · 任何新增都走这四步。
 | --- | --- | --- | --- |
 | 新工具 · Tool | `crates/rsagent-agent/src/tools.rs`（内置）或独立 crate（外部） | `builtin_tools()` 里加一行 / `Agent::with_tools` | 一个端到端 `agent_loop` 风格测试（脚本化工具调用 → 断言结果） |
 | 新提供商 · Provider | `crates/rsagent-ai/src/providers/<name>.rs` | `Models::register` | 流式解析单测（喂真实 SSE 片段）+ `thinking` 映射单测 |
-| 新工具来源 · ToolSource | `crates/rsagent-agent/src/sources/<name>.rs` | `ToolCatalog::add` | 来源解析单测 + 健康/熔断单测（见 §3） |
+| 新工具来源 · ToolSource | `crates/rsagent-agent/src/sources/<name>.rs` | `ToolCatalog::build(Vec<SourceEntry>)` | 来源解析单测 + 健康/熔断单测（见 §3） |
 | 新审批策略 · Approver | `crates/rsagent-agent/src/approval.rs` 或调用方 | `Agent::with_approver` | 决策表测试（哪些名字/参数通过） |
 | 新 CLI 参数 | `crates/rsagent/src/main.rs` 的 `Cli` | — | `tests/cli.rs` 里加一条（含 `--help` 断言） |
 | 新事件 · AgentEvent 变体 | `crates/rsagent-agent/src/event.rs` | `Agent::emit` | 在对应 `agent_loop` 测试里断言事件序列 |
@@ -167,18 +167,21 @@ at assembly time by `ToolCatalog`; the loop never learns where tools come from.
 
 | kind | 例子 | 传输 · Transport | "安装"是什么 | 默认需要审批 | 三平台 |
 | --- | --- | --- | --- | --- | --- |
-| `builtin` | `read_file` … `bash` | 同进程 | — | 按工具 | ✅ |
-| `local` | 项目自带的脚本/二进制 | 子进程 stdin/stdout（JSON 行） | 检查可执行文件存在 | ✅ | ✅ |
-| `mcp-stdio` | `@modelcontextprotocol/server-filesystem` | 子进程 + MCP 协议 | 配置即安装（`npx`/`uvx` 按需拉取） | 按工具注解 | ✅ |
-| `mcp-http` | 远端 MCP 服务 | HTTP + SSE | 配置即安装（写 URL + 令牌） | 按工具注解 | ✅ |
-| `skill` | 一个文件夹 + `SKILL.md` + 脚本 | 文件夹扫描 → 展开为工具 | 目录存在性检查 | ✅ | ✅ |
-| `web` | 把某个 HTTP 端点包装成工具 | HTTP | 配置即安装 | ✅ | ✅ |
+| `builtin` | `read_file` … `bash` | 同进程 | — | 按工具 | ✅ **已实现** |
+| `local` | 项目自带的脚本/二进制 | 子进程 stdin/stdout（JSON 行） | 检查可执行文件存在 | ✅ | ✅ **已实现** |
+| `mcp-stdio` | `@modelcontextprotocol/server-filesystem` | 子进程 + MCP 协议 | 配置即安装（`npx`/`uvx` 按需拉取） | 按工具注解 | 待 P2 |
+| `mcp-http` | 远端 MCP 服务 | HTTP + SSE | 配置即安装（写 URL + 令牌） | 按工具注解 | 待 P2 |
+| `skill` | 一个文件夹 + `SKILL.md` + 脚本 | 文件夹扫描 → 展开为工具 | 目录存在性检查 | ✅ | 待 P2 |
+| `web` | 把某个 HTTP 端点包装成工具 | HTTP | 配置即安装 | ✅ | 待 P2 |
 
 **一种对接方式，多种来源。** 新增来源类型 = 实现 `ToolSource` 一次，而不是改循环。
+`SourceKind` 是 `#[non_exhaustive]`，P2 的四种来源会作为新变体加入，不影响下游。
 
 ### 3.3 配置 · Configuration
 
-One file, `rsagent.toml`, project-local, with CLI flags overriding it.
+One file, `rsagent.toml`, project-local, with CLI flags overriding it. **已实现**
+（`crates/rsagent/src/config.rs`）；当前只解析 `builtin` 与 `local` 两种 `kind`，下面
+示例里的 `mcp-stdio` / `skill` 是 P2 的目标形态。
 
 ```toml
 # rsagent.toml
@@ -188,7 +191,7 @@ id = "core"
 exclude = ["bash"]              # 与 --no-bash 等价
 
 [[tools.sources]]
-kind = "mcp-stdio"
+kind = "mcp-stdio"              # ← P2
 id = "filesystem"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -196,19 +199,22 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 prefix = "fs"
 
 [[tools.sources]]
-kind = "skill"
+kind = "skill"                  # ← P2
 id = "team-conventions"
 path = "./skills/conventions"
 
 [[tools.sources]]
-kind = "local"
+kind = "local"                  # ← 已实现
 id = "release"
 command = "./scripts/release-tool"
 timeout_secs = 60
 ```
 
-**优先级 MUST 为：CLI 参数 > 环境变量 > 项目配置 > 用户配置 > 内置默认。** 这条 MUST
-写进 `--help` 与 README（§5）。
+`local` 来源的线协议（version 1）见 README「The `local` source protocol」：程序被调用
+两次，`--describe` 列出工具，`--call` 执行一次调用，均以单行 JSON 通信。
+
+**优先级 MUST 为：CLI 参数 > 环境变量 > 项目配置 > 用户配置 > 内置默认。** 已实现
+前三档（用户级配置待补）；这条 MUST 写进 `--help` 与 README（§5）。
 
 ### 3.4 命名与冲突 · Naming and collisions
 
@@ -232,12 +238,20 @@ timeout_secs = 60
       失败 → 回到 unhealthy，冷却翻倍（上限 10min）
 ```
 
+**实现状态（P1）：** 状态机本身已实现（`crates/rsagent-agent/src/breaker.rs`：
+Closed / Open / HalfOpen、连续失败计数、冷却翻倍且有上限、半开只放行一次探测）。
+`LocalSource::health()` 会据此报告 `Unhealthy`，`LocalTool::execute()` 在熔断打开时
+直接拒绝调用。**尚未实现的两点**（留到 P3 的 `doctor`）：运行时把工具从装配好的列表
+里摘除、以及 `AgentEvent::SourceUnhealthy` 事件——因为当前没有消费者，写了就是"没有
+调用者的代码"（北极星①）。
+
 要点：
 
 - **只对"连接类"失败计数**（来源不可达、协议错误、超时），不对"业务失败"计数
   （工具正常返回 `Err` 说明它在工作）。这条区分不做，一个总是报错的工具会把自己的来源
-  熔断掉，反而掩盖问题。
-- 熔断器状态 MUST 可通过 `rsagent tools`（§3.6）查询与手动重置。
+  熔断掉，反而掩盖问题。**已实现**：`LocalTool::execute()` 只在"无法启动 / 超时 /
+  非零退出 / 输出非 JSON"时 `record_failure`，合法的 `{"error": ...}` 回复只算业务失败。
+- 熔断器状态 MUST 可通过 `rsagent tools`（§3.6）查询与手动重置。**待 P3。**
 - 实现上复用 `rsagent-ai/src/providers/http.rs` 里 `send_with_retry` / `is_retryable_status`
   的分类思路：**先分清"可重试"与"不可重试"，再谈重试与熔断。**
 
@@ -324,7 +338,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 项 | 主流做法 | 本项目 | 决策 |
 | --- | --- | --- | --- |
 | 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
-| 配置优先级 | CLI > env > project > user | 未文档化 | **MUST 文档化**（§3.3） |
+| 配置优先级 | CLI > env > project > user | ✅ 已实现前三档并文档化（`rsagent.toml`，README） | **MUST 文档化**（§3.3） |
 | 机器可读输出 | `--json` / `--output-format` | 无 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 |
@@ -353,11 +367,11 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 
 | 项 | 内容 | 对①的影响 |
 | --- | --- | --- |
-| P1-1 | `ToolSource` + `ToolCatalog`（§3.1） | +约 150 行，但换来"新增来源不动循环" |
-| P1-2 | `rsagent.toml` 读取与优先级（§3.3） | +约 80 行 |
-| P1-3 | 命名冲突检测与 `prefix`（§3.4） | +约 40 行 |
-| P1-4 | 健康熔断器（§3.5） | +约 120 行 |
-| P1-5 | `local` 来源（子进程 JSON 行协议）——作为**活样板** | +约 120 行 |
+| P1-1 | ✅ `ToolSource` + `ToolCatalog`（§3.1） | +约 150 行，但换来"新增来源不动循环" |
+| P1-2 | ✅ `rsagent.toml` 读取与优先级（§3.3） | +约 80 行 |
+| P1-3 | ✅ 命名冲突检测与 `prefix`（§3.4） | +约 40 行 |
+| P1-4 | ✅ 健康熔断器（§3.5） | +约 120 行 |
+| P1-5 | ✅ `local` 来源（子进程 JSON 行协议）——作为**活样板** | +约 120 行 |
 
 ### P2 — 主流工具接入
 
