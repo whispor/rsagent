@@ -3,3 +3,5 @@
 # Local secrets and session files — never commit these.
 .env
 *.session.json
+# The default session file resumed by `--continue`.
+.rsagent-session.json
