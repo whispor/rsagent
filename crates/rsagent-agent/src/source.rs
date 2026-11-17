@@ -9,9 +9,9 @@ use crate::tool::Tool;
 
 /// What kind of source a [`ToolSource`] is.
 ///
-/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `mcp-stdio`, `mcp-http`,
-/// `skill`, and `web`. They are added in P2 — declaring variants with no implementation
-/// would be code without a caller.
+/// `#[non_exhaustive]`: `docs/EXTENSIBILITY.md` §3.2 also names `mcp-http`, `skill`, and
+/// `web`. They are added later — declaring variants with no implementation would be code
+/// without a caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SourceKind {
@@ -19,6 +19,10 @@ pub enum SourceKind {
     Builtin,
     /// A program run as a subprocess, speaking the JSON-lines protocol.
     Local,
+    /// A [Model Context Protocol] server, spoken over stdio.
+    ///
+    /// [Model Context Protocol]: https://modelcontextprotocol.io
+    McpStdio,
 }
 
 impl SourceKind {
@@ -27,6 +31,7 @@ impl SourceKind {
         match self {
             SourceKind::Builtin => "builtin",
             SourceKind::Local => "local",
+            SourceKind::McpStdio => "mcp-stdio",
         }
     }
 }

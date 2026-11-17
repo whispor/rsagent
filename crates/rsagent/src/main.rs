@@ -18,8 +18,8 @@ use std::time::Duration;
 use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
-    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, PathFence, SourceEntry, SourceHealth,
-    ToolCatalog,
+    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpStdioSource, PathFence,
+    SourceEntry, SourceHealth, ToolCatalog,
 };
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -457,8 +457,18 @@ async fn build_source(
                 LocalSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
             Ok(Box::new(source))
         }
+        "mcp-stdio" => {
+            let command = spec
+                .command
+                .as_deref()
+                .ok_or_else(|| "an `mcp-stdio` source needs `command`".to_string())?;
+            let timeout = spec.timeout_secs.map(Duration::from_secs);
+            let source =
+                McpStdioSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
+            Ok(Box::new(source))
+        }
         other => Err(format!(
-            "unknown source kind `{other}` (expected `builtin` or `local`)"
+            "unknown source kind `{other}` (expected `builtin`, `local`, or `mcp-stdio`)"
         )),
     }
 }

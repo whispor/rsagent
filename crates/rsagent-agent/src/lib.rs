@@ -26,7 +26,10 @@ pub use catalog::{CatalogError, SourceEntry, ToolCatalog, PREFIX_SEPARATOR};
 pub use error::AgentError;
 pub use event::AgentEvent;
 pub use source::{SourceHealth, SourceKind, ToolSource};
-pub use sources::{BuiltinSource, LocalSource, BUILTIN_SOURCE_ID, PROTOCOL_VERSION};
+pub use sources::{
+    BuiltinSource, LocalSource, McpStdioSource, BUILTIN_SOURCE_ID, MCP_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+};
 pub use tool::{PathFence, Tool, ToolContext, ToolResult};
 pub use tools::{
     builtin_tools, select_builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool,

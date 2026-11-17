@@ -38,7 +38,7 @@ pub(crate) struct Tools {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceConfig {
-    /// The source kind: `builtin` or `local` (`docs/EXTENSIBILITY.md` §3.2).
+    /// The source kind: `builtin`, `local`, or `mcp-stdio` (`docs/EXTENSIBILITY.md` §3.2).
     pub kind: String,
     /// A stable id, unique among sources.
     pub id: String,

@@ -493,12 +493,62 @@ fn a_config_driven_local_source_is_listed() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// The `mcp_echo` example binary, if it was built next to this test binary.
+fn mcp_echo_program() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let profile = exe.parent()?.parent()?;
+    let name = if cfg!(windows) {
+        "mcp_echo.exe"
+    } else {
+        "mcp_echo"
+    };
+    let path = profile.join("examples").join(name);
+    path.exists().then_some(path)
+}
+
+#[test]
+fn a_config_driven_mcp_stdio_source_is_listed() {
+    let Some(program) = mcp_echo_program() else {
+        eprintln!("skipping: the `mcp_echo` example was not built");
+        return;
+    };
+    let dir = temp_dir("config-mcp");
+    // Escape backslashes so the path is a valid TOML basic string on Windows.
+    let command = program.display().to_string().replace('\\', "\\\\");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        format!(
+            "[[tools.sources]]\nkind = \"mcp-stdio\"\nid = \"echo\"\ncommand = \"{command}\"\nprefix = \"echo\"\n"
+        ),
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[mcp-stdio]"),
+        "the source kind is missing: {stdout}"
+    );
+    assert!(
+        listed_tools(&stdout).contains(&"echo__echo".to_string()),
+        "the prefixed MCP tool is missing: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn an_unknown_source_kind_is_reported_and_skipped() {
     let dir = temp_dir("config-unknown-kind");
     std::fs::write(
         dir.join("rsagent.toml"),
-        "[[tools.sources]]\nkind = \"mcp-stdio\"\nid = \"future\"\n",
+        "[[tools.sources]]\nkind = \"future\"\nid = \"future\"\n",
     )
     .expect("write rsagent.toml");
 
@@ -511,7 +561,7 @@ fn an_unknown_source_kind_is_reported_and_skipped() {
     assert!(output.status.success(), "exit status: {:?}", output.status);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown source kind `mcp-stdio`"),
+        stderr.contains("unknown source kind `future`"),
         "the unsupported kind must be reported: {stderr}"
     );
 
