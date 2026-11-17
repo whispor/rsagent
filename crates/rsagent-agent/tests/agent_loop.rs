@@ -523,3 +523,65 @@ async fn webfetch_returns_page_text_without_markup() {
         "script content must be dropped: {result}"
     );
 }
+
+#[tokio::test]
+async fn read_file_numbers_lines_and_honors_a_range() {
+    let dir = temp_dir("read-file-range-it");
+    std::fs::write(dir.join("poem.txt"), "alpha\nbeta\ngamma\ndelta\n").expect("write poem");
+    let path = dir.join("poem.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![(
+            "read_file",
+            json!({ "path": path, "offset": 2, "limit": 2 }),
+        )]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent
+        .prompt("read a slice")
+        .await
+        .expect("prompt completes");
+
+    let result = tool_result_text(&agent, "read_file");
+    assert!(
+        result.contains("2\tbeta"),
+        "line numbers are shown: {result}"
+    );
+    assert!(result.contains("3\tgamma"), "got: {result}");
+    assert!(
+        !result.contains("alpha"),
+        "lines before the range: {result}"
+    );
+    assert!(!result.contains("delta"), "lines after the range: {result}");
+    assert!(
+        result.contains("showing lines 2-3 of 4"),
+        "range footer: {result}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn read_file_reads_the_whole_file_by_default() {
+    let dir = temp_dir("read-file-full-it");
+    std::fs::write(dir.join("two.txt"), "one\ntwo\n").expect("write file");
+    let path = dir.join("two.txt").to_string_lossy().into_owned();
+
+    let (mut agent, _faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![("read_file", json!({ "path": path }))]),
+        FauxResponse::text("done"),
+    ]);
+
+    agent.prompt("read it").await.expect("prompt completes");
+
+    let result = tool_result_text(&agent, "read_file");
+    assert!(result.contains("1\tone"), "got: {result}");
+    assert!(result.contains("2\ttwo"), "got: {result}");
+    assert!(
+        !result.contains("showing lines"),
+        "no footer for a full read: {result}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

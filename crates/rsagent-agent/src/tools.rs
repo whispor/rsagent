@@ -1,6 +1,7 @@
 //! Built-in tools: the filesystem and shell primitives a coding agent needs.
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -49,7 +50,11 @@ fn required_str(args: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("missing required string argument `{key}`"))
 }
 
-/// Read a file's contents as UTF-8 text.
+/// Read a file's contents as UTF-8 text, with line numbers.
+///
+/// Each line is prefixed with its 1-based line number, so the model can refer to exact
+/// locations and match `edit_file` snippets reliably. `offset` and `limit` read a range
+/// of a large file instead of pulling the whole thing into context.
 #[derive(Debug)]
 pub struct ReadFileTool;
 
@@ -58,9 +63,13 @@ impl Tool for ReadFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "read_file",
-            "Read a file's contents as UTF-8 text. The path may be absolute or relative to the working directory.",
+            "Read a file as UTF-8 text; every line is prefixed with its line number. Use `offset` and `limit` to read a range of a large file. The path may be absolute or relative to the working directory.",
             object_schema(
-                &json!({ "path": { "type": "string", "description": "File path" } }),
+                &json!({
+                    "path": { "type": "string", "description": "File path" },
+                    "offset": { "type": "integer", "description": "First line to read, 1-based (default 1)" },
+                    "limit": { "type": "integer", "description": "Maximum number of lines to read (default: to end of file)" },
+                }),
                 &["path"],
             ),
         )
@@ -78,10 +87,51 @@ impl Tool for ReadFileTool {
     ) -> Result<ToolResult, String> {
         let path = required_str(&args, "path")?;
         let resolved = context.resolve(&path);
-        match tokio::fs::read_to_string(&resolved).await {
-            Ok(data) => Ok(ToolResult::text(data)),
-            Err(error) => Err(format!("failed to read {}: {error}", resolved.display())),
+        let data = tokio::fs::read_to_string(&resolved)
+            .await
+            .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
+
+        let lines: Vec<&str> = data.lines().collect();
+        let total = lines.len();
+        if total == 0 {
+            return Ok(ToolResult::text(format!(
+                "(empty file: {})",
+                resolved.display()
+            )));
         }
+
+        let offset = args
+            .get("offset")
+            .and_then(Value::as_u64)
+            .map_or(1, |value| usize::try_from(value).unwrap_or(1).max(1));
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok());
+        let start = offset.saturating_sub(1).min(total);
+        if start >= total {
+            return Ok(ToolResult::text(format!(
+                "(offset {offset} is past the end of {}: {total} line(s))",
+                resolved.display()
+            )));
+        }
+        let end = match limit {
+            Some(limit) => start.saturating_add(limit).min(total),
+            None => total,
+        };
+
+        // Right-align the numbers to the width of the largest one in the slice.
+        let width = end.to_string().len();
+        let mut out = String::new();
+        for (index, line) in lines[start..end].iter().enumerate() {
+            let number = start + index + 1;
+            let _ = writeln!(out, "{number:>width$}\t{line}");
+        }
+        if start > 0 || end < total {
+            let first = start + 1;
+            let _ = writeln!(out, "\n… (showing lines {first}-{end} of {total})");
+        }
+        Ok(ToolResult::text(out))
     }
 }
 

@@ -79,6 +79,9 @@ cargo run -p rsagent -- --model gpt-4o-mini
 > exit
 ```
 
+When stdin is a terminal the REPL has line editing and history (the up arrow recalls
+earlier prompts, Ctrl-R searches them). Piped input is read line by line as before.
+
 A line starting with `/` is a command rather than a prompt:
 
 | Command | Effect |
@@ -104,13 +107,15 @@ A line starting with `/` is a command rather than a prompt:
 | `--max-tokens <N>` | | Maximum tokens to generate per response (provider default when unset). |
 | `-y, --yes` | | Auto-approve every tool call. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
+| `--continue` | | Resume the default session file (`.rsagent-session.json`). |
+| `--no-color` | `NO_COLOR` | Disable ANSI colors. |
 | `-V, --version` | | Print the version and exit. |
 
 ## Built-in tools
 
 | Tool | Approval | Description |
 | --- | --- | --- |
-| `read_file` | no | Read a file as UTF-8 text. |
+| `read_file` | no | Read a file as UTF-8 text, each line prefixed with its line number; `offset`/`limit` read a range. |
 | `list_dir` | no | List directory entries. |
 | `search` | no | Search files under a directory for a literal substring (`path:line: text`). |
 | `glob` | no | Find files by glob pattern (`*`, `?`, `**`), one path per line. |
@@ -167,7 +172,12 @@ rsagent --session work.json --print "now summarize what you read"
 ```
 
 On resume the saved system prompt is restored, unless `--system` is passed to override
-it.
+it. `--continue` is a shorthand for `--session .rsagent-session.json`, so a single
+project-local transcript can be resumed without repeating the path.
+
+The file is a versioned envelope (`{"version":1,"context":{...}}`), so an older build
+recognizes — and refuses rather than misreads — a file written by a newer one. Files
+in the original bare-`Context` format are still read.
 
 ## Configuration
 
@@ -181,8 +191,11 @@ environment variables win).
 | `RSAGENT_API_KEY` | API key for that endpoint. |
 | `RSAGENT_MODEL` | Model id to use. |
 | `ANTHROPIC_API_KEY` | API key used when `--anthropic` is passed. |
+| `NO_COLOR` | Disable ANSI colors when set to a non-empty value. |
 
 The `--help` output shows the env variable backing each flag but never its value.
+Colors are also disabled automatically when stdout is not a terminal, so redirected
+output and log files stay clean.
 
 ## Notes and limitations
 

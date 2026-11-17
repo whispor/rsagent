@@ -6,8 +6,10 @@
     reason = "this binary is the CLI's output layer; printing to the terminal is its purpose"
 )]
 
-use std::io::Write;
-use std::path::PathBuf;
+mod input;
+mod render;
+
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,40 +17,33 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{builtin_tools, Agent, AgentEvent, Approver};
 use rsagent_ai::{
-    AnthropicProvider, Context, ErrorReason, FauxProvider, FauxResponse, Message, Model, Models,
-    OpenAiProvider, StreamEvent, StreamOptions,
+    AnthropicProvider, AssistantMessage, Context, ErrorReason, FauxProvider, FauxResponse, Message,
+    Model, Models, OpenAiProvider, StreamEvent, StreamOptions,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::Mutex;
 
-/// A single buffered reader over stdin, shared by the REPL and the approval prompt.
-///
-/// Both read through this one instance so input buffered for one is never lost to the
-/// other (two independent readers over the same terminal can swallow each other's bytes).
-type SharedInput = Arc<Mutex<BufReader<tokio::io::Stdin>>>;
-
-fn shared_stdin() -> SharedInput {
-    Arc::new(Mutex::new(BufReader::new(tokio::io::stdin())))
-}
-
-/// Read one line from the shared reader, returning `None` at end of input.
-async fn read_line(input: &SharedInput) -> std::io::Result<Option<String>> {
-    let mut guard = input.lock().await;
-    let mut line = String::new();
-    if guard.read_line(&mut line).await? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(line))
-}
+use input::InputHandle;
+use render::{ColorChoice, Palette};
 
 const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are rsagent, a concise coding assistant running in a terminal.
 Use the provided tools to read and modify files and to run commands.
 Prefer small, focused changes. Explain briefly what you did.";
 
+/// Session files are wrapped in a versioned envelope, so a future format change is
+/// detected instead of silently misread.
+const SESSION_VERSION: u32 = 1;
+
+/// The session file resumed by `--continue`.
+const DEFAULT_SESSION_FILE: &str = ".rsagent-session.json";
+
 #[derive(Parser, Debug)]
 #[command(name = "rsagent", version, about = "A minimal Rust coding agent")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a CLI's flags are naturally boolean; grouping them would obscure the interface"
+)]
 struct Cli {
     /// Model id to use (default: gpt-4o-mini).
     #[arg(short, long, env = "RSAGENT_MODEL", hide_env_values = true)]
@@ -101,6 +96,14 @@ struct Cli {
     /// Persist the conversation to a JSON file, resuming it if it already exists.
     #[arg(long)]
     session: Option<PathBuf>,
+
+    /// Resume the default session file (`.rsagent-session.json`).
+    #[arg(long = "continue")]
+    continue_: bool,
+
+    /// Disable ANSI colors (also disabled by the `NO_COLOR` environment variable).
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[tokio::main]
@@ -109,15 +112,27 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
 
     let cli = Cli::parse();
+    let color = if cli.no_color {
+        ColorChoice::Never
+    } else {
+        ColorChoice::Auto
+    };
+    let palette = Palette::detect(color);
 
-    let input = shared_stdin();
-    let (mut agent, faux_handle, model) = build_agent(&cli, Arc::clone(&input));
+    let input = InputHandle::spawn();
+    let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     agent.subscribe(tx);
 
+    // `--session` names a file explicitly; `--continue` falls back to the default one.
+    let session_path = cli
+        .session
+        .clone()
+        .or_else(|| cli.continue_.then(|| PathBuf::from(DEFAULT_SESSION_FILE)));
+
     // Resume a persisted transcript, if one exists.
-    if let Some(path) = &cli.session {
+    if let Some(path) = &session_path {
         match load_session(path) {
             Ok(Some(context)) => {
                 let count = context.messages.len();
@@ -129,17 +144,22 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 eprintln!(
-                    "\x1b[2m· resumed {} message(s) from {}\x1b[0m",
-                    count,
-                    path.display()
+                    "{}",
+                    palette.dim(&format!(
+                        "· resumed {count} message(s) from {}",
+                        path.display()
+                    ))
                 );
             }
             Ok(None) => {}
-            Err(err) => eprintln!("\x1b[33m· could not read {}: {err}\x1b[0m", path.display()),
+            Err(err) => eprintln!(
+                "{}",
+                palette.yellow(&format!("· could not read {}: {err}", path.display()))
+            ),
         }
     }
 
-    let mut renderer = Renderer::new(cli.cwd.clone());
+    let mut renderer = Renderer::new(cli.cwd.clone(), palette);
 
     if let Some(prompt) = cli.print.clone() {
         if let Some(faux) = &faux_handle {
@@ -148,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
             ))]);
         }
         run_prompt(&mut agent, &mut rx, &mut renderer, prompt).await?;
-        save_session(cli.session.as_deref(), &agent);
+        save_session(session_path.as_deref(), &agent, palette);
         return Ok(());
     }
 
@@ -165,14 +185,18 @@ async fn main() -> anyhow::Result<()> {
         &mut rx,
         &mut renderer,
         faux_handle.as_ref(),
-        &cli,
         &input,
+        session_path.as_deref(),
     )
     .await
 }
 
 /// Build the model registry, the agent, and (in `--faux` mode) the scripted provider.
-fn build_agent(cli: &Cli, input: SharedInput) -> (Agent, Option<FauxProvider>, Model) {
+fn build_agent(
+    cli: &Cli,
+    input: InputHandle,
+    palette: Palette,
+) -> (Agent, Option<FauxProvider>, Model) {
     let default_model = if cli.anthropic {
         "claude-3-5-sonnet-latest"
     } else {
@@ -259,6 +283,7 @@ fn build_agent(cli: &Cli, input: SharedInput) -> (Agent, Option<FauxProvider>, M
         .with_approver(CliApprover {
             mode: approval,
             input,
+            palette,
             allow_all: Arc::new(AtomicBool::new(false)),
         })
         .with_options(options);
@@ -283,14 +308,11 @@ async fn run_repl(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     renderer: &mut Renderer,
     faux: Option<&FauxProvider>,
-    cli: &Cli,
-    input: &SharedInput,
+    input: &InputHandle,
+    session_path: Option<&Path>,
 ) -> anyhow::Result<()> {
     loop {
-        print!("> ");
-        std::io::stdout().flush().ok();
-
-        let Some(line) = read_line(input).await? else {
+        let Some(line) = input.read_prompt("> ").await? else {
             break; // EOF
         };
         let input_text = line.trim();
@@ -307,11 +329,21 @@ async fn run_repl(
                 "clear" => {
                     let dropped = agent.messages().len();
                     agent.load_messages(Vec::new());
-                    save_session(cli.session.as_deref(), agent);
-                    println!("\x1b[2m· 已清空会话记录（丢弃 {dropped} 条消息）\x1b[0m");
+                    save_session(session_path, agent, renderer.palette);
+                    println!(
+                        "{}",
+                        renderer
+                            .palette
+                            .dim(&format!("· 已清空会话记录（丢弃 {dropped} 条消息）"))
+                    );
                 }
                 "" => {}
-                other => println!("\x1b[33m· 未知命令 /{other}，输入 /help 查看可用命令\x1b[0m"),
+                other => println!(
+                    "{}",
+                    renderer
+                        .palette
+                        .yellow(&format!("· 未知命令 /{other}，输入 /help 查看可用命令"))
+                ),
             }
             continue;
         }
@@ -323,38 +355,72 @@ async fn run_repl(
         }
 
         run_prompt(agent, rx, renderer, input_text.to_string()).await?;
-        save_session(cli.session.as_deref(), agent);
+        save_session(session_path, agent, renderer.palette);
     }
 
     Ok(())
 }
 
+/// A session file: a versioned envelope around the persisted [`Context`].
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionFile {
+    /// Format version, so a newer file can be recognized (and rejected) by an older build.
+    version: u32,
+    /// The persisted transcript and system prompt.
+    context: Context,
+}
+
 /// Read a persisted transcript, if the file exists.
-fn load_session(path: &std::path::Path) -> anyhow::Result<Option<Context>> {
+///
+/// Both the current versioned envelope and the older bare-`Context` format are
+/// accepted; a file written by a newer format version is rejected rather than misread.
+fn load_session(path: &Path) -> anyhow::Result<Option<Context>> {
     if !path.exists() {
         return Ok(None);
     }
     let text = std::fs::read_to_string(path)?;
-    let context: Context = serde_json::from_str(&text)?;
-    Ok(Some(context))
+    let value: Value = serde_json::from_str(&text)?;
+    if value.get("version").is_some() {
+        let file: SessionFile = serde_json::from_value(value)?;
+        if file.version > SESSION_VERSION {
+            anyhow::bail!(
+                "written by a newer rsagent (format v{}); this build understands up to v{}",
+                file.version,
+                SESSION_VERSION
+            );
+        }
+        Ok(Some(file.context))
+    } else {
+        // Legacy format: a bare `Context` with no envelope.
+        Ok(Some(serde_json::from_value(value)?))
+    }
 }
 
 /// Write the transcript to `path`, if a session file was requested.
-fn save_session(path: Option<&std::path::Path>, agent: &Agent) {
+fn save_session(path: Option<&Path>, agent: &Agent, palette: Palette) {
     let Some(path) = path else {
         return;
     };
-    let context = agent.transcript();
-    match serde_json::to_string_pretty(&context) {
+    let file = SessionFile {
+        version: SESSION_VERSION,
+        context: agent.transcript(),
+    };
+    match serde_json::to_string_pretty(&file) {
         Ok(json) => {
             if let Err(err) = std::fs::write(path, json) {
                 eprintln!(
-                    "\x1b[33m· could not save session to {}: {err}\x1b[0m",
-                    path.display()
+                    "{}",
+                    palette.yellow(&format!(
+                        "· could not save session to {}: {err}",
+                        path.display()
+                    ))
                 );
             }
         }
-        Err(err) => eprintln!("\x1b[33m· could not serialize session: {err}\x1b[0m"),
+        Err(err) => eprintln!(
+            "{}",
+            palette.yellow(&format!("· could not serialize session: {err}"))
+        ),
     }
 }
 
@@ -379,7 +445,7 @@ async fn run_prompt(
                 renderer.render(&event);
             }
             _ = tokio::signal::ctrl_c() => {
-                eprintln!("\n\x1b[33m· aborting…\x1b[0m");
+                eprintln!("{}", renderer.palette.yellow("\n· aborting…"));
                 cancel.cancel();
             }
         }
@@ -409,8 +475,10 @@ enum ApprovalMode {
 #[derive(Debug, Clone)]
 struct CliApprover {
     mode: ApprovalMode,
-    /// Shared with the REPL so both read the terminal through one buffer.
-    input: SharedInput,
+    /// Shared with the REPL so both read the terminal through one reader.
+    input: InputHandle,
+    /// Styling for the CLI's own messages.
+    palette: Palette,
     /// Set once the user answers `a`: every later call is allowed without asking.
     allow_all: Arc<AtomicBool>,
 }
@@ -422,7 +490,10 @@ impl Approver for CliApprover {
             ApprovalMode::Auto => true,
             ApprovalMode::Deny => {
                 eprintln!(
-                    "\x1b[33m· skipped {tool_name}: approval required (pass --yes to allow)\x1b[0m"
+                    "{}",
+                    self.palette.yellow(&format!(
+                        "· skipped {tool_name}: approval required (pass --yes to allow)"
+                    ))
                 );
                 false
             }
@@ -433,12 +504,15 @@ impl Approver for CliApprover {
                 if self.allow_all.load(Ordering::Relaxed) {
                     return true;
                 }
-                match read_line(&self.input).await {
+                match self.input.read_answer("> ").await {
                     Ok(Some(line)) => match line.trim().to_ascii_lowercase().as_str() {
                         "y" | "yes" => true,
                         "a" | "all" => {
                             self.allow_all.store(true, Ordering::Relaxed);
-                            println!("\x1b[33m  · 好的，本次会话后续操作将不再询问\x1b[0m");
+                            println!(
+                                "{}",
+                                self.palette.yellow("  · 好的，本次会话后续操作将不再询问")
+                            );
                             true
                         }
                         _ => false,
@@ -462,48 +536,26 @@ struct Renderer {
     thinking_open: bool,
     /// Working directory used to explain file operations in plain language.
     cwd: PathBuf,
+    /// Styling that honors `--no-color` / `NO_COLOR`.
+    palette: Palette,
 }
 
 impl Renderer {
-    fn new(cwd: PathBuf) -> Self {
+    fn new(cwd: PathBuf, palette: Palette) -> Self {
         Renderer {
             line_open: false,
             thinking_open: false,
             cwd,
+            palette,
         }
     }
 
     fn render(&mut self, event: &AgentEvent) {
         match event {
             AgentEvent::MessageUpdate { event } => match event {
-                StreamEvent::ThinkingDelta { delta, .. } => {
-                    // Switching from an answer back to reasoning starts a new line.
-                    if self.line_open && !self.thinking_open {
-                        self.flush_line();
-                    }
-                    print!("\x1b[2m{delta}\x1b[0m");
-                    std::io::stdout().flush().ok();
-                    self.line_open = true;
-                    self.thinking_open = true;
-                }
-                StreamEvent::TextDelta { delta, .. } => {
-                    // The answer must not run into the preceding reasoning line.
-                    if self.thinking_open {
-                        self.flush_line();
-                    }
-                    print!("{delta}");
-                    std::io::stdout().flush().ok();
-                    self.line_open = true;
-                }
-                StreamEvent::Error { error, reason } => {
-                    self.flush_line();
-                    let label = match reason {
-                        ErrorReason::Aborted => "aborted",
-                        _ => "error",
-                    };
-                    let detail = error.error_message.as_deref().unwrap_or("unknown error");
-                    eprintln!("\x1b[31m✗ model {label}:\x1b[0m {detail}");
-                }
+                StreamEvent::ThinkingDelta { delta, .. } => self.render_thinking_delta(delta),
+                StreamEvent::TextDelta { delta, .. } => self.render_text_delta(delta),
+                StreamEvent::Error { error, reason } => self.render_stream_error(error, *reason),
                 _ => {}
             },
             AgentEvent::TurnEnd {
@@ -514,10 +566,13 @@ impl Renderer {
                 if usage.input > 0 || usage.output > 0 {
                     self.flush_line();
                     eprintln!(
-                        "\x1b[2m· tokens: {} in / {} out (total {})\x1b[0m",
-                        usage.input,
-                        usage.output,
-                        usage.total_tokens()
+                        "{}",
+                        self.palette.dim(&format!(
+                            "· tokens: {} in / {} out (total {})",
+                            usage.input,
+                            usage.output,
+                            usage.total_tokens()
+                        ))
                     );
                 }
             }
@@ -525,28 +580,24 @@ impl Renderer {
                 tool_name, args, ..
             } => {
                 self.flush_line();
-                let mut lines = self.describe_approval(tool_name, args).into_iter();
-                let title = lines
-                    .next()
-                    .unwrap_or_else(|| format!("调用工具「{tool_name}」"));
-                println!("\x1b[33m? 需要你确认\x1b[0m");
-                println!("\x1b[33m  操作：{title}\x1b[0m");
-                for line in lines {
-                    println!("\x1b[33m  {line}\x1b[0m");
-                }
-                println!("\x1b[33m  → 输入 y 再回车 = 只允许这一次\x1b[0m");
-                println!("\x1b[33m  → 输入 a 再回车 = 允许，且本次会话后续操作都不再询问\x1b[0m");
-                println!("\x1b[33m  → 直接回车 = 拒绝（我会换个方式继续）\x1b[0m");
+                self.print_approval_prompt(tool_name, args);
             }
             AgentEvent::ToolExecutionStart {
                 tool_name, args, ..
             } => {
                 self.flush_line();
-                println!("\x1b[36m⚙ {}\x1b[0m", describe_action(tool_name, args));
+                println!(
+                    "{}",
+                    self.palette
+                        .cyan(&format!("⚙ {}", describe_action(tool_name, args)))
+                );
             }
             AgentEvent::ToolExecutionUpdate { content, .. } => {
                 self.flush_line();
-                println!("\x1b[2m  │ {}\x1b[0m", truncate(content, 200));
+                println!(
+                    "{}",
+                    self.palette.dim(&format!("  │ {}", truncate(content, 200)))
+                );
             }
             AgentEvent::ToolExecutionEnd {
                 tool_name,
@@ -556,19 +607,87 @@ impl Renderer {
             } => {
                 self.flush_line();
                 let marker = if *is_error { "✗" } else { "✓" };
-                let color = if *is_error { "31" } else { "32" };
-                println!(
-                    "\x1b[{color}m{marker} {}：\x1b[0m{}",
-                    tool_display_name(tool_name),
-                    truncate(content, 200)
-                );
+                let label = format!("{marker} {}：", tool_display_name(tool_name));
+                let painted = if *is_error {
+                    self.palette.red(&label)
+                } else {
+                    self.palette.green(&label)
+                };
+                println!("{painted}{}", truncate(content, 200));
             }
             AgentEvent::ContextCompacted { dropped_messages } => {
                 self.flush_line();
-                eprintln!("\x1b[2m· 上下文接近上限，已裁剪较早的 {dropped_messages} 条消息\x1b[0m");
+                eprintln!(
+                    "{}",
+                    self.palette.dim(&format!(
+                        "· 上下文接近上限，已裁剪较早的 {dropped_messages} 条消息"
+                    ))
+                );
             }
             _ => {}
         }
+    }
+
+    /// Append a reasoning delta, starting a fresh line if an answer was in progress.
+    fn render_thinking_delta(&mut self, delta: &str) {
+        if self.line_open && !self.thinking_open {
+            self.flush_line();
+        }
+        print!("{}", self.palette.dim(delta));
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        self.line_open = true;
+        self.thinking_open = true;
+    }
+
+    /// Append an answer delta, starting a fresh line if reasoning was in progress.
+    fn render_text_delta(&mut self, delta: &str) {
+        if self.thinking_open {
+            self.flush_line();
+        }
+        print!("{delta}");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        self.line_open = true;
+    }
+
+    /// Report a terminal stream error (or an abort) on stderr.
+    fn render_stream_error(&mut self, error: &AssistantMessage, reason: ErrorReason) {
+        self.flush_line();
+        let label = match reason {
+            ErrorReason::Aborted => "aborted",
+            _ => "error",
+        };
+        let detail = error.error_message.as_deref().unwrap_or("unknown error");
+        eprintln!(
+            "{} {detail}",
+            self.palette.red(&format!("✗ model {label}:"))
+        );
+    }
+
+    /// Print the plain-language approval prompt for a tool call.
+    fn print_approval_prompt(&self, tool_name: &str, args: &Value) {
+        let mut lines = self.describe_approval(tool_name, args).into_iter();
+        let title = lines
+            .next()
+            .unwrap_or_else(|| format!("调用工具「{tool_name}」"));
+        println!("{}", self.palette.yellow("? 需要你确认"));
+        println!("{}", self.palette.yellow(&format!("  操作：{title}")));
+        for line in lines {
+            println!("{}", self.palette.yellow(&format!("  {line}")));
+        }
+        println!(
+            "{}",
+            self.palette.yellow("  → 输入 y 再回车 = 只允许这一次")
+        );
+        println!(
+            "{}",
+            self.palette
+                .yellow("  → 输入 a 再回车 = 允许，且本次会话后续操作都不再询问")
+        );
+        println!(
+            "{}",
+            self.palette
+                .yellow("  → 直接回车 = 拒绝（我会换个方式继续）")
+        );
     }
 
     /// A plain-language explanation of what an approval request will do.

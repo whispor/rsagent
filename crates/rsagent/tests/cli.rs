@@ -48,6 +48,8 @@ fn help_lists_the_flags() {
         "--temperature",
         "--max-tokens",
         "--anthropic",
+        "--continue",
+        "--no-color",
     ] {
         assert!(
             stdout.contains(flag),
@@ -146,4 +148,119 @@ fn repl_handles_slash_commands() {
         stdout.contains("已清空会话记录"),
         "/clear output missing: {stdout}"
     );
+}
+
+/// A unique temporary directory for one test.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rsagent-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+#[test]
+fn no_color_output_has_no_escapes() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--no-color"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "no ANSI escapes expected: {stdout:?}"
+    );
+}
+
+#[test]
+fn a_versioned_session_is_resumed() {
+    let dir = temp_dir("session-resume");
+    let session = dir.join("work.json");
+    std::fs::write(
+        &session,
+        r#"{"version":1,"context":{"systemPrompt":"saved prompt","messages":[]}}"#,
+    )
+    .expect("write session");
+
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("resumed"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_legacy_session_without_a_version_is_still_read() {
+    let dir = temp_dir("session-legacy");
+    let session = dir.join("old.json");
+    // The old format: a bare `Context` with no version envelope.
+    std::fs::write(&session, r#"{"systemPrompt":"legacy","messages":[]}"#).expect("write session");
+
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("resumed"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_newer_session_format_is_rejected_but_the_run_continues() {
+    let dir = temp_dir("session-newer");
+    let session = dir.join("future.json");
+    std::fs::write(&session, r#"{"version":99,"context":{"messages":[]}}"#).expect("write session");
+
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        output.status.success(),
+        "the run still succeeds: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("could not read"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn continue_creates_and_then_resumes_the_default_session() {
+    let dir = temp_dir("session-continue");
+
+    let first = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi", "--continue"])
+        .output()
+        .expect("run rsagent");
+    assert!(first.status.success(), "exit status: {:?}", first.status);
+    assert!(
+        dir.join(".rsagent-session.json").exists(),
+        "the default session file should be created"
+    );
+
+    let second = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi", "--continue"])
+        .output()
+        .expect("run rsagent");
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(stderr.contains("resumed"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
 }

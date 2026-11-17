@@ -41,6 +41,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
+rustyline = { version = "19", default-features = false }
 
 # Lint policy adapted from the BeautifulRust project's drop-in `lints.toml`.
 # Members opt in with `[lints] workspace = true`.
