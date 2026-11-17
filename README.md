@@ -159,6 +159,14 @@ id = "filesystem"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 prefix = "fs"             # MCP tool names are often generic, so a prefix is wise
+
+[[tools.sources]]
+kind = "mcp-http"         # a Model Context Protocol server, over HTTP
+id = "remote"
+url = "https://mcp.example.com/mcp"
+prefix = "rm"
+timeout_secs = 30
+headers = { Authorization = "Bearer sk-..." }      # sent on every request
 ```
 
 With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
@@ -221,6 +229,27 @@ reconnected on the next call; `mcp-stdio` shares the same per-source circuit bre
 consecutive connection-class failures rather than retried forever. The child is
 `kill_on_drop`-ed, so it does not outlive the agent. Because MCP tool names are generic
 (`read`, `list`, …), giving the source a `prefix` is strongly recommended.
+
+#### The `mcp-http` source (Model Context Protocol over HTTP)
+
+An `mcp-http` source is an MCP server reached over the network instead of a subprocess —
+for a hosted server, or one you would rather not spawn locally. It implements the MCP
+**Streamable HTTP** transport: `rsagent` POSTs JSON-RPC messages to the single `url`, and
+accepts either reply encoding — a plain JSON object (`application/json`) or a Server-Sent
+Events stream (`text/event-stream`), which the spec allows a server to use. The same
+`initialize` → `notifications/initialized` → `tools/list` → `tools/call` lifecycle and the
+same `inputSchema` / `readOnlyHint` handling apply as for `mcp-stdio`.
+
+If the server answers `initialize` with an `Mcp-Session-Id` header, every later request
+echoes it back; otherwise each request stands alone. `headers` are added to every request,
+which is how you supply an `Authorization` token (or any other tenant/API header). Because
+HTTP requests are independent, these tools are **not** sequential — the agent may run
+several at once, unlike `mcp-stdio`.
+
+`timeout_secs` (default 60) bounds each request. A transport failure (the endpoint is
+unreachable, a request times out, a non-success status with no JSON-RPC error) drops the
+session and re-initializes on the next call, and counts toward the same per-source circuit
+breaker as the other MCP sources; a well-formed JSON-RPC `error` does not.
 
 ## CLI reference
 
