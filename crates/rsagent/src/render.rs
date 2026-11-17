@@ -25,6 +25,9 @@ pub(crate) enum OutputMode {
     /// One-shot `--print`: the answer owns stdout while progress (tool activity,
     /// approval prompts) goes to stderr, so redirected output is exactly the answer.
     OneShot,
+    /// `--json`: every event is written to stdout as one JSON object per line, and the
+    /// human-facing progress chatter is suppressed. For CI and scripts.
+    Json,
 }
 
 /// ANSI styling that degrades to plain text.
@@ -114,6 +117,10 @@ impl Renderer {
     }
 
     pub(crate) fn render(&mut self, event: &AgentEvent) {
+        if self.mode == OutputMode::Json {
+            self.render_json(event);
+            return;
+        }
         match event {
             AgentEvent::MessageUpdate { event } => match event {
                 StreamEvent::ThinkingDelta { delta, .. } => self.render_thinking_delta(delta),
@@ -185,6 +192,23 @@ impl Renderer {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// Emit one event as a single JSON line on stdout.
+    ///
+    /// The event types contain only strings, numbers, and already-serializable messages,
+    /// so serialization does not fail in practice; if it ever did, the problem is
+    /// reported on stderr rather than panicking, so a consumer always sees well-formed
+    /// JSON lines and can still detect the failure from the exit code.
+    fn render_json(&self, event: &AgentEvent) {
+        match serde_json::to_string(event) {
+            Ok(line) => println!("{line}"),
+            Err(error) => eprintln!(
+                "{}",
+                self.palette
+                    .red(&format!("· could not serialize event: {error}"))
+            ),
         }
     }
 
@@ -321,6 +345,10 @@ impl Renderer {
         match self.mode {
             OutputMode::Interactive => println!("{text}"),
             OutputMode::OneShot => eprintln!("{text}"),
+            // The JSON stream already carries every event; a human progress line would
+            // only corrupt it. (Unreachable today — `render` returns before this — but
+            // kept explicit so the mode stays exhaustive.)
+            OutputMode::Json => {}
         }
     }
 

@@ -63,6 +63,12 @@ struct Cli {
     #[arg(short, long)]
     print: Option<String>,
 
+    /// Emit the agent event stream as JSON lines on stdout, for CI and scripts.
+    ///
+    /// Requires `--print`: the JSON stream replaces the interactive rendering.
+    #[arg(long)]
+    json: bool,
+
     /// Base URL of an OpenAI-compatible endpoint.
     #[arg(long, env = "RSAGENT_BASE_URL", hide_env_values = true)]
     base_url: Option<String>,
@@ -149,6 +155,17 @@ async fn main() -> anyhow::Result<()> {
     };
     let palette = Palette::detect(color);
 
+    // `--json` streams events for machines; it only makes sense in one-shot `--print`
+    // mode, so reject the combination early rather than emitting a half-interactive
+    // stream. Fail fast, before any source is spawned.
+    if cli.json && cli.print.is_none() {
+        eprintln!(
+            "{}",
+            palette.red("· --json requires --print (it streams events for CI and scripts)")
+        );
+        std::process::exit(2);
+    }
+
     // Assemble the tool set once, from `rsagent.toml` plus CLI flags, so `--list-tools`
     // and the agent see exactly the same catalog.
     let catalog = match build_catalog(&cli, palette).await {
@@ -205,7 +222,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // A one-shot `--print` run keeps stdout to the answer alone; the REPL interleaves.
-    let mode = if cli.print.is_some() {
+    // `--json` replaces both with one JSON object per event.
+    let mode = if cli.json {
+        OutputMode::Json
+    } else if cli.print.is_some() {
         OutputMode::OneShot
     } else {
         OutputMode::Interactive

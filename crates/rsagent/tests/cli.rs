@@ -70,6 +70,7 @@ fn help_lists_the_flags() {
         "--no-bash",
         "--thinking",
         "--list-tools",
+        "--json",
     ] {
         assert!(
             stdout.contains(flag),
@@ -664,6 +665,52 @@ fn an_unknown_source_kind_is_reported_and_skipped() {
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn json_emits_the_event_stream_as_json_lines() {
+    // `--json` is the machine-readable counterpart of `--print`: stdout carries one JSON
+    // object per event, so a script can follow the run without parsing terminal output.
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--json"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let mut kinds = Vec::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let value: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|error| panic!("line is not JSON: {line:?} ({error})"));
+        let kind = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| panic!("event has no `type`: {line:?}"));
+        kinds.push(kind.to_string());
+    }
+
+    assert!(kinds.iter().any(|k| k == "agentStart"), "kinds: {kinds:?}");
+    assert!(kinds.iter().any(|k| k == "turnEnd"), "kinds: {kinds:?}");
+    assert!(kinds.iter().any(|k| k == "agentEnd"), "kinds: {kinds:?}");
+}
+
+#[test]
+fn json_without_print_is_rejected() {
+    let output = rsagent()
+        .args(["--faux", "--json"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "`--json` without `--print` must be refused"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--json requires --print"),
+        "the reason must be explained: {stderr}"
+    );
 }
 
 #[test]
