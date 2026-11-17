@@ -91,6 +91,9 @@ cargo run -p rsagent -- --model gpt-4o-mini
 | `--anthropic` | | Talk to an Anthropic Messages API endpoint instead of an OpenAI-compatible one. |
 | `--cwd <DIR>` | | Working directory the agent operates in (default `.`). |
 | `--system <PROMPT>` | | Override the system prompt. |
+| `--max-turns <N>` | | Maximum model turns in a single run (default `50`). |
+| `--temperature <F>` | | Sampling temperature (provider default when unset). |
+| `--max-tokens <N>` | | Maximum tokens to generate per response (provider default when unset). |
 | `-y, --yes` | | Auto-approve every tool call. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
 | `-V, --version` | | Print the version and exit. |
@@ -159,6 +162,15 @@ Environment variables are read from the process environment. A `.env` file in th
 working directory is loaded at startup (simple `KEY=VALUE` lines; existing
 environment variables win).
 
+| Variable | Purpose |
+| --- | --- |
+| `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. |
+| `RSAGENT_API_KEY` | API key for that endpoint. |
+| `RSAGENT_MODEL` | Model id to use. |
+| `ANTHROPIC_API_KEY` | API key used when `--anthropic` is passed. |
+
+The `--help` output shows the env variable backing each flag but never its value.
+
 ## Notes and limitations
 
 - Two wire protocols are implemented natively: OpenAI Chat Completions and Anthropic
@@ -176,4 +188,4 @@ environment variables win).
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).

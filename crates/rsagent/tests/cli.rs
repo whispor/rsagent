@@ -36,3 +36,80 @@ fn version_flag_prints_the_crate_version() {
         "unexpected version output: {stdout}"
     );
 }
+
+#[test]
+fn help_lists_the_flags() {
+    let output = rsagent().arg("--help").output().expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for flag in [
+        "--max-turns",
+        "--temperature",
+        "--max-tokens",
+        "--anthropic",
+    ] {
+        assert!(
+            stdout.contains(flag),
+            "`{flag}` is missing from help: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn help_does_not_leak_env_values() {
+    // The env var name should show up, but never its value.
+    let output = rsagent()
+        .env("RSAGENT_API_KEY", "sentinel-secret-value")
+        .arg("--help")
+        .output()
+        .expect("run rsagent");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("RSAGENT_API_KEY"),
+        "the env var name should appear in help: {stdout}"
+    );
+    assert!(
+        !stdout.contains("sentinel-secret-value"),
+        "the env value must never be printed: {stdout}"
+    );
+}
+
+#[test]
+fn tuning_flags_are_accepted() {
+    let output = rsagent()
+        .args([
+            "--faux",
+            "--print",
+            "hi",
+            "--max-turns",
+            "5",
+            "--temperature",
+            "0.2",
+            "--max-tokens",
+            "512",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("(faux) you said: hi"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
+fn a_zero_turn_limit_is_rejected() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--max-turns", "0"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "a zero turn limit must be rejected"
+    );
+}

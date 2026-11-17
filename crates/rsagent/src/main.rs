@@ -82,6 +82,18 @@ struct Cli {
     #[arg(long)]
     system: Option<String>,
 
+    /// Maximum number of model turns in a single run.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..), default_value_t = 50)]
+    max_turns: u32,
+
+    /// Sampling temperature (provider default when unset).
+    #[arg(long)]
+    temperature: Option<f32>,
+
+    /// Maximum tokens to generate per response (provider default when unset).
+    #[arg(long)]
+    max_tokens: Option<u32>,
+
     /// Auto-approve every tool call (skip the confirmation prompt).
     #[arg(short = 'y', long)]
     yes: bool,
@@ -234,12 +246,15 @@ fn build_agent(cli: &Cli, input: SharedInput) -> (Agent, Option<FauxProvider>, M
 
     let options = StreamOptions {
         api_key: cli.api_key.clone(),
+        temperature: cli.temperature,
+        max_tokens: cli.max_tokens,
         ..StreamOptions::default()
     };
 
     let agent = Agent::new(models, model.clone(), system_prompt)
         .with_tools(builtin_tools())
         .with_cwd(&cli.cwd)
+        .with_max_turns(usize::try_from(cli.max_turns).unwrap_or(50))
         .with_session_id(format!("rsagent-{}", std::process::id()))
         .with_approver(CliApprover {
             mode: approval,
