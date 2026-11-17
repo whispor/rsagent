@@ -544,6 +544,48 @@ fn a_config_driven_mcp_stdio_source_is_listed() {
 }
 
 #[test]
+fn a_config_driven_skill_source_is_listed() {
+    let dir = temp_dir("config-skill");
+    // A skill folder: the marker, a manifest, and the script each tool runs.
+    let skill = dir.join("team");
+    std::fs::create_dir_all(&skill).expect("create the skill dir");
+    std::fs::write(skill.join("SKILL.md"), "# A test skill\n").expect("write SKILL.md");
+    let script = if cfg!(windows) { "run.cmd" } else { "run.sh" };
+    std::fs::write(skill.join(script), "exit 0\n").expect("write the script");
+    std::fs::write(
+        skill.join("skill.toml"),
+        format!(
+            "[[tool]]\nname = \"lint\"\ndescription = \"Lint a path.\"\ncommand = \"{script}\"\n"
+        ),
+    )
+    .expect("write skill.toml");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"skill\"\nid = \"team\"\npath = \"team\"\nprefix = \"team\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[skill]"),
+        "the source kind is missing: {stdout}"
+    );
+    assert!(
+        listed_tools(&stdout).contains(&"team__lint".to_string()),
+        "the prefixed skill tool is missing: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn an_unreachable_mcp_http_source_is_reported_and_skipped() {
     let dir = temp_dir("config-mcp-http");
     // Port 1 on loopback is never listening, so the handshake fails at load time.

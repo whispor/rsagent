@@ -39,7 +39,7 @@ pub(crate) struct Tools {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceConfig {
-    /// The source kind: `builtin`, `local`, `mcp-stdio`, or `mcp-http`
+    /// The source kind: `builtin`, `local`, `mcp-stdio`, `mcp-http`, or `skill`
     /// (`docs/EXTENSIBILITY.md` §3.2).
     pub kind: String,
     /// A stable id, unique among sources.
@@ -60,6 +60,9 @@ pub(crate) struct SourceConfig {
     /// sources).
     #[serde(default)]
     pub args: Vec<String>,
+    /// The skill folder (`skill` sources): a directory holding `SKILL.md` and `skill.toml`.
+    #[serde(default)]
+    pub path: Option<String>,
     /// The endpoint URL (`mcp-http` sources).
     #[serde(default)]
     pub url: Option<String>,
@@ -170,6 +173,25 @@ mod tests {
             headers.get("Authorization").map(String::as_str),
             Some("Bearer token")
         );
+    }
+
+    #[test]
+    fn a_skill_source_parses_its_path() {
+        let config = Config::parse(
+            r#"
+            [[tools.sources]]
+            kind = "skill"
+            id = "team"
+            path = "./skills/team"
+            prefix = "team"
+        "#,
+        )
+        .expect("parse");
+
+        let source = &config.tools.sources[0];
+        assert_eq!(source.kind, "skill");
+        assert_eq!(source.path.as_deref(), Some("./skills/team"));
+        assert_eq!(source.prefix.as_deref(), Some("team"));
     }
 
     #[test]

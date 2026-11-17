@@ -19,7 +19,7 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpHttpSource, McpStdioSource,
-    PathFence, SourceEntry, SourceHealth, ToolCatalog,
+    PathFence, SkillSource, SourceEntry, SourceHealth, ToolCatalog,
 };
 use rsagent_ai::{
     AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -482,8 +482,17 @@ async fn build_source(
             let source = McpHttpSource::new(spec.id.clone(), url, headers, timeout).await?;
             Ok(Box::new(source))
         }
+        "skill" => {
+            let path = spec
+                .path
+                .as_deref()
+                .ok_or_else(|| "a `skill` source needs `path`".to_string())?;
+            let timeout = spec.timeout_secs.map(Duration::from_secs);
+            let source = SkillSource::new(spec.id.clone(), path, timeout)?;
+            Ok(Box::new(source))
+        }
         other => Err(format!(
-            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, or `mcp-http`)"
+            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, `mcp-http`, or `skill`)"
         )),
     }
 }
