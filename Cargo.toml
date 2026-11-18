@@ -47,6 +47,8 @@ dotenvy = "0.15"
 rustyline = { version = "19", default-features = false }
 # Only the parser is needed; `display` would add a writer we never use.
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+# Formatting-preserving TOML edits, for `rsagent tools add/remove`.
+toml_edit = "0.22"
 
 # Lint policy adapted from the BeautifulRust project's drop-in `lints.toml`.
 # Members opt in with `[lints] workspace = true`.

@@ -945,3 +945,226 @@ fn continue_creates_and_then_resumes_the_default_session() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn tools_help_lists_the_subcommands() {
+    let output = rsagent()
+        .args(["tools", "--help"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for sub in ["list", "doctor", "add", "remove"] {
+        assert!(
+            stdout.contains(sub),
+            "`{sub}` is missing from `tools --help`: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn tools_list_prints_the_builtins() {
+    // `tools list` and the `--list-tools` flag share one catalog builder, so the same
+    // builtin tools must appear either way.
+    let output = rsagent()
+        .args(["tools", "list"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for name in ["read_file", "write_file", "bash", "webfetch"] {
+        assert!(
+            stdout.contains(name),
+            "`{name}` is missing from `tools list`: {stdout}"
+        );
+    }
+    assert!(stdout.contains("core [builtin]"), "stdout: {stdout}");
+}
+
+#[test]
+fn tools_add_writes_a_valid_entry() {
+    let dir = temp_dir("tools-add");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "tools",
+            "add",
+            "weather",
+            "--kind",
+            "web",
+            "--url",
+            "https://example.com/api",
+            "--name",
+            "get_weather",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let text = std::fs::read_to_string(dir.join("rsagent.toml")).expect("read rsagent.toml");
+    assert!(text.contains("[[tools.sources]]"), "{text}");
+    assert!(text.contains("id = \"weather\""), "{text}");
+    assert!(text.contains("kind = \"web\""), "{text}");
+    assert!(text.contains("url = \"https://example.com/api\""), "{text}");
+    assert!(text.contains("name = \"get_weather\""), "{text}");
+    // The `[tools]` table is implicit, so the file reads as a plain list of
+    // `[[tools.sources]]` entries with no bare `[tools]` header line.
+    assert!(
+        !text.lines().any(|line| line.trim() == "[tools]"),
+        "unexpected bare [tools] header: {text}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_add_rejects_a_duplicate_id() {
+    let dir = temp_dir("tools-add-duplicate");
+    let first = rsagent()
+        .current_dir(&dir)
+        .args([
+            "tools",
+            "add",
+            "weather",
+            "--kind",
+            "web",
+            "--url",
+            "https://example.com/api",
+        ])
+        .output()
+        .expect("run rsagent");
+    assert!(first.status.success(), "exit status: {:?}", first.status);
+
+    let second = rsagent()
+        .current_dir(&dir)
+        .args([
+            "tools",
+            "add",
+            "weather",
+            "--kind",
+            "web",
+            "--url",
+            "https://other.example/api",
+        ])
+        .output()
+        .expect("run rsagent");
+    assert!(
+        !second.status.success(),
+        "a duplicate id must be refused, not overwritten"
+    );
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(stderr.contains("already exists"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_add_then_remove_round_trips() {
+    let dir = temp_dir("tools-roundtrip");
+    let added = rsagent()
+        .current_dir(&dir)
+        .args([
+            "tools",
+            "add",
+            "weather",
+            "--kind",
+            "web",
+            "--url",
+            "https://example.com/api",
+        ])
+        .output()
+        .expect("run rsagent");
+    assert!(added.status.success(), "exit status: {:?}", added.status);
+
+    let removed = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "remove", "weather"])
+        .output()
+        .expect("run rsagent");
+    assert!(
+        removed.status.success(),
+        "exit status: {:?}",
+        removed.status
+    );
+
+    let text = std::fs::read_to_string(dir.join("rsagent.toml")).expect("read rsagent.toml");
+    assert!(
+        !text.contains("weather"),
+        "the entry should be gone: {text}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_remove_unknown_id_is_an_error() {
+    let dir = temp_dir("tools-remove-missing");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"builtin\"\nid = \"core\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "remove", "ghost"])
+        .output()
+        .expect("run rsagent");
+    assert!(!output.status.success(), "removing an unknown id must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no source with id `ghost`"),
+        "stderr: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_doctor_reports_a_healthy_builtin() {
+    let dir = temp_dir("tools-doctor-ok");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "doctor"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("core [builtin]"), "stdout: {stdout}");
+    assert!(stdout.contains("正常"), "stdout: {stdout}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_doctor_fails_on_an_unloadable_source() {
+    // `doctor` is usable as a CI gate: an unloadable source makes it exit non-zero and
+    // prints a kind-specific fix hint.
+    let dir = temp_dir("tools-doctor-bad");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"local\"\nid = \"broken\"\ncommand = \"rsagent-no-such-program-xyz\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "doctor"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "doctor must fail when a source will not load"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("broken"), "stdout: {stdout}");
+    assert!(stdout.contains("检查"), "a fix hint is expected: {stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("个来源有问题"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

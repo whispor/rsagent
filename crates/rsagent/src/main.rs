@@ -11,6 +11,7 @@ mod fs;
 mod input;
 mod render;
 mod session;
+mod tools;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -136,6 +137,10 @@ struct Cli {
     /// Extended-reasoning budget: off, minimal, low, medium, high, xhigh, or max.
     #[arg(long, value_parser = parse_thinking, default_value = "off")]
     thinking: ThinkingLevel,
+
+    /// Manage tool sources: list, doctor, add, remove.
+    #[command(subcommand)]
+    command: Option<tools::Command>,
 }
 
 #[tokio::main]
@@ -150,6 +155,15 @@ async fn main() -> anyhow::Result<()> {
         ColorChoice::Auto
     };
     let palette = Palette::detect(color);
+
+    // A subcommand runs first: it never needs a model or a provider.
+    if let Some(command) = &cli.command {
+        if let Err(error) = tools::run(command, &cli, palette).await {
+            eprintln!("{}", palette.red(&format!("· {error}")));
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
 
     // `--json` streams events for machines; it only makes sense in one-shot `--print`
     // mode, so reject the combination early rather than emitting a half-interactive
