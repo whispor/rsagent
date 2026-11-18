@@ -27,6 +27,7 @@ New to the code? Three entry points. · 初次读代码？三个入口。
   流程、必须遵守的不变量，以及提交前检查清单。
 - **[Stability · 稳定性](STABILITY.md)** — the versioning promise, the public API, the
   MSRV, and the no-telemetry statement. · 版本承诺、公开 API、MSRV，以及不收集遥测的声明。
+- **[Changelog · 变更日志](CHANGELOG.md)** — what changed in each version. · 每个版本的变更。
 - **[The life of a tool call · 一次工具调用的完整旅程](docs/tool-call-journey.html)** —
   a visual walkthrough of one turn, step by step, with the real function and event names.
   Open the file in a browser. · 一个回合的逐步可视化讲解，标注真实的函数名与事件名。
@@ -196,8 +197,10 @@ single source that fails to load is reported and **skipped**, so one broken sour
 take the whole agent down. `--list-tools` prints every source, its health, and the
 assembled tools.
 
-The precedence is **CLI flags > environment > `rsagent.toml` > built-in defaults**:
-`--tools` replaces a built-in source's `only`, and `--no-bash` adds to its `exclude`.
+The precedence is **CLI flags > environment > project `rsagent.toml` > user `rsagent.toml`
+> built-in defaults**: `--tools` replaces a built-in source's `only`, and `--no-bash` adds
+to its `exclude`. When both a user-level and a project-local file exist, their sources are
+merged by `id` (the project entry wins).
 
 #### Managing tool sources
 
@@ -367,6 +370,8 @@ source out of the tool list (see decision D9).
 | `-m, --model <ID>` | `RSAGENT_MODEL` | Model id to use (default `gpt-4o-mini`). |
 | `-p, --print <PROMPT>` | | Run one prompt and exit. |
 | `--json` | | Emit the agent event stream as JSON lines on stdout, for CI and scripts (requires `--print`). |
+| `--log <FILE>` | | Append the agent event stream to `FILE` as JSON lines, in every mode, for post-mortem diagnosis. |
+| `-v, --verbose` | | Print extra diagnostics on stderr (resolved config, sources, per-turn timing). |
 | `--base-url <URL>` | `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. |
 | `--api-key <KEY>` | `RSAGENT_API_KEY` | API key; overrides the provider's env lookup. |
 | `--faux` | | Use the offline scripted provider. |
@@ -528,13 +533,32 @@ rsagent --json --print "list the files here" | jq -c 'select(.type == "toolExecu
 The exit-code semantics below are unchanged: a run that fails still exits non-zero, so a
 consumer can rely on both the stream and the code.
 
+### Event log
+
+Pass `--log <FILE>` to append the same JSON-lines event stream to a file. Unlike
+`--json`, it works in **every** mode — including the interactive REPL — so an unattended
+run still leaves a machine-readable trace. The file is append-only, so a trace accumulates
+across runs, and a crash mid-write only ever truncates the last line:
+
+```bash
+rsagent --log run.jsonl --yes --print "refactor the parser"
+```
+
+`-v, --verbose` prints extra diagnostics on stderr — the resolved config file(s), each
+source with its tool count, and per-turn timing — which pairs well with `--log` when a run
+behaves unexpectedly.
+
 ## Configuration
 
 Environment variables are read from the process environment. A `.env` file in the
 working directory is loaded at startup (simple `KEY=VALUE` lines; existing
-environment variables win). A project-local `rsagent.toml` configures the tool sources
-(see [Tool sources](#tool-sources-rsagenttoml)); the overall precedence is
-**CLI flags > environment > `rsagent.toml` > built-in defaults**.
+environment variables win). Tool sources are configured by **two** `rsagent.toml` files
+that are layered together: a **user-level** file (found at `$XDG_CONFIG_HOME/rsagent/`,
+`%APPDATA%\rsagent\`, or `~/.config/rsagent/`; override with `RSAGENT_USER_CONFIG`) and a
+**project-local** one found at or above the working directory. Entries are merged by source
+`id`, and a project entry overrides a user entry with the same id, so a repo can pin or
+override a globally-declared source. The overall precedence is
+**CLI flags > environment > project `rsagent.toml` > user `rsagent.toml` > built-in defaults**.
 
 | Variable | Purpose |
 | --- | --- |
@@ -542,6 +566,7 @@ environment variables win). A project-local `rsagent.toml` configures the tool s
 | `RSAGENT_API_KEY` | API key for that endpoint. |
 | `RSAGENT_MODEL` | Model id to use. |
 | `ANTHROPIC_API_KEY` | API key used when `--anthropic` is passed. |
+| `RSAGENT_USER_CONFIG` | Override the user-level `rsagent.toml` path. |
 | `NO_COLOR` | Disable ANSI colors when set to a non-empty value. |
 
 The `--help` output shows the env variable backing each flag but never its value.
@@ -568,6 +593,12 @@ output and log files stay clean.
   separated from its result; a `ContextCompacted` event reports how many messages were
   dropped.
 - The `bash` tool is not sandboxed; approval prompts are the only guardrail.
+- **Same-process (WASM) plugin sandboxing is a non-goal.** Third-party code runs the same
+  way the built-ins do — as a subprocess (`local`, `skill`, MCP) or an HTTP call (`web`) —
+  so isolation is the operating system's job, not the agent's. A `wasmtime`-style sandbox
+  would add a large dependency and a second execution model for little gain; the
+  subprocess/HTTP boundary already keeps a broken source from taking the agent down and
+  lets the circuit breaker quarantine it.
 - `--thinking` is translated per protocol: OpenAI-compatible endpoints get
   `reasoning_effort` (`xhigh`/`max` saturate at `high`), while Anthropic gets an enabled
   `thinking` block with a `budget_tokens` derived from the level (capped below

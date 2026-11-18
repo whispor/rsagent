@@ -18,13 +18,16 @@ pub(super) fn is_retryable_status(status: reqwest::StatusCode) -> bool {
 /// or `x-api-key: …`); `content-type` is set here. A response that arrives with a
 /// non-retryable error status is returned as an `Err` carrying the status and body;
 /// the caller turns it into a terminal stream event.
+///
+/// `client` is the provider's shared HTTP client, so the connection pool is reused
+/// across requests rather than rebuilt on every call.
 pub(super) async fn send_with_retry(
+    client: &reqwest::Client,
     url: &str,
     headers: &[(String, String)],
     body: &Value,
     max_retries: u32,
 ) -> Result<reqwest::Response, String> {
-    let client = reqwest::Client::new();
     let max_attempts = max_retries.saturating_add(1);
 
     for attempt in 0..max_attempts {

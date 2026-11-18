@@ -15,6 +15,10 @@ pub(super) struct ProviderCore {
     models: Vec<Model>,
     env_keys: Vec<String>,
     base_url_override: Option<String>,
+    /// One HTTP client per provider, so its connection pool is reused across requests
+    /// instead of rebuilt on every call. Deliberately built with no request timeout:
+    /// streaming responses are long-lived and must not be cut off mid-stream.
+    client: reqwest::Client,
 }
 
 impl ProviderCore {
@@ -25,7 +29,13 @@ impl ProviderCore {
             models,
             env_keys,
             base_url_override: None,
+            client: reqwest::Client::new(),
         }
+    }
+
+    /// The provider's shared HTTP client (cheap to clone; clones share the pool).
+    pub(super) fn client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     /// Point every model at `base_url` instead of its catalog value.

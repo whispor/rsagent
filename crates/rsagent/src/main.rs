@@ -10,6 +10,7 @@ mod breakers;
 mod config;
 mod fs;
 mod input;
+mod log;
 mod render;
 mod session;
 mod tools;
@@ -32,7 +33,7 @@ use rsagent_ai::{
 };
 use serde_json::Value;
 
-use config::{find_upward, Config, SourceConfig};
+use config::{find_upward, load_layered, SourceConfig};
 use input::InputHandle;
 use render::{truncate, ColorChoice, OutputMode, Palette, Renderer};
 
@@ -65,6 +66,17 @@ struct Cli {
     /// Requires `--print`: the JSON stream replaces the interactive rendering.
     #[arg(long)]
     json: bool,
+
+    /// Append the agent event stream to a file as JSON lines, for post-mortem diagnosis.
+    ///
+    /// Works in every mode (interactive or `--print`); the file is appended to, so a
+    /// trace accumulates across runs.
+    #[arg(long, value_name = "FILE")]
+    log: Option<PathBuf>,
+
+    /// Print extra diagnostics on stderr (resolved config, sources, per-turn timing).
+    #[arg(short, long)]
+    verbose: bool,
 
     /// Base URL of an OpenAI-compatible endpoint.
     #[arg(long, env = "RSAGENT_BASE_URL", hide_env_values = true)]
@@ -178,6 +190,10 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
+    // Open the event-log sink (no-op without `--log`). Done before any source is spawned
+    // so a bad path fails fast rather than after a run has started.
+    let mut log = open_event_log(&cli, palette);
+
     // Assemble the tool set once, from `rsagent.toml` plus CLI flags, so `--list-tools`
     // and the agent see exactly the same catalog.
     let catalog = match build_catalog(&cli, palette).await {
@@ -207,24 +223,12 @@ async fn main() -> anyhow::Result<()> {
     let probe = health_probe(Arc::clone(&sources));
     let input = InputHandle::spawn();
     let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette, tools, probe);
+    log_startup_summary(&cli, &model, &sources, palette);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     agent.subscribe(tx);
 
-    // `--session` names a file explicitly; `--continue` falls back to the default one.
-    let mut session = cli
-        .session
-        .clone()
-        .or_else(|| {
-            cli.continue_
-                .then(|| PathBuf::from(session::DEFAULT_SESSION_FILE))
-        })
-        .map(|path| session::Session::open(&path));
-
-    // Resume a persisted transcript, if one exists.
-    if let Some(session) = &mut session {
-        resume_session(session, &mut agent, &cli, palette);
-    }
+    let mut session = open_session(&cli, &mut agent, palette);
 
     // A one-shot `--print` run keeps stdout to the answer alone; the REPL interleaves.
     // `--json` replaces both with one JSON object per event.
@@ -235,7 +239,9 @@ async fn main() -> anyhow::Result<()> {
     } else {
         OutputMode::Interactive
     };
-    let mut renderer = Renderer::new(cli.cwd.clone(), palette).with_mode(mode);
+    let mut renderer = Renderer::new(cli.cwd.clone(), palette)
+        .with_mode(mode)
+        .with_verbose(cli.verbose);
 
     if let Some(prompt) = cli.print.clone() {
         if let Some(faux) = &faux_handle {
@@ -243,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
                 "(faux) you said: {prompt}"
             ))]);
         }
-        run_prompt(&mut agent, &mut rx, &mut renderer, prompt).await?;
+        run_prompt(&mut agent, &mut rx, &mut renderer, &mut log, prompt).await?;
         if let Some(session) = &mut session {
             session.save(&agent, palette);
         }
@@ -270,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         &mut agent,
         &mut rx,
         &mut renderer,
+        &mut log,
         faux_handle.as_ref(),
         &input,
         session.as_mut(),
@@ -277,6 +284,71 @@ async fn main() -> anyhow::Result<()> {
     .await;
     save_breakers(&mut breakers, &sources, palette);
     result
+}
+
+/// Open the `--log` sink, or a no-op sink when `--log` was not passed.
+///
+/// A bad path is fatal (`exit 2`): `--log` is an explicit request for a trace, so silently
+/// dropping it would defeat its purpose. Doing this before any source is spawned means the
+/// failure surfaces immediately, not after a run has already done work.
+fn open_event_log(cli: &Cli, palette: Palette) -> log::EventLog {
+    let Some(path) = &cli.log else {
+        return log::EventLog::disabled();
+    };
+    match log::EventLog::open(path) {
+        Ok(log) => {
+            eprintln!(
+                "{}",
+                palette.dim(&format!("· logging events to {}", path.display()))
+            );
+            log
+        }
+        Err(error) => {
+            eprintln!(
+                "{}",
+                palette.red(&format!("· could not open log {}: {error}", path.display()))
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Print a one-line startup summary when `--verbose` is set: the resolved model, the working
+/// directory, and how many sources and tools were assembled. The per-source breakdown is
+/// printed separately by [`build_catalog`]; this line is the at-a-glance header.
+fn log_startup_summary(cli: &Cli, model: &Model, sources: &[SourceEntry], palette: Palette) {
+    if !cli.verbose {
+        return;
+    }
+    let tools: usize = sources
+        .iter()
+        .map(|entry| entry.source().tools().len())
+        .sum();
+    eprintln!(
+        "{}",
+        palette.dim(&format!(
+            "· [verbose] model {} ({}), cwd {} — {} source(s), {tools} tool(s)",
+            model.id,
+            model.provider,
+            cli.cwd.display(),
+            sources.len()
+        ))
+    );
+}
+
+/// Open the session file named by `--session`/`--continue` and resume it if present.
+///
+/// Returns `None` when neither flag was given, so the caller simply runs without
+/// persistence. `--session` names a file explicitly; `--continue` falls back to the
+/// default file.
+fn open_session(cli: &Cli, agent: &mut Agent, palette: Palette) -> Option<session::Session> {
+    let path = cli.session.clone().or_else(|| {
+        cli.continue_
+            .then(|| PathBuf::from(session::DEFAULT_SESSION_FILE))
+    })?;
+    let mut session = session::Session::open(&path);
+    resume_session(&mut session, agent, cli, palette);
+    Some(session)
 }
 
 /// Snapshot every source's breaker and persist it, reporting (but never failing on) an
@@ -494,18 +566,18 @@ fn read_project_instructions(start: &Path) -> Option<String> {
 /// A source that cannot be prepared is reported and skipped: one broken source must not
 /// take the whole agent down (`docs/EXTENSIBILITY.md` §3.5).
 async fn build_catalog(cli: &Cli, palette: Palette) -> anyhow::Result<ToolCatalog> {
-    let config = match Config::load(&cli.cwd) {
-        Ok((config, path)) => {
-            if let Some(path) = path {
-                eprintln!("{}", palette.dim(&format!("· config: {}", path.display())));
-            }
-            config
-        }
-        Err(error) => {
-            eprintln!("{}", palette.yellow(&format!("· ignoring config: {error}")));
-            Config::default()
-        }
-    };
+    // Layer the user-level file under the project file (project wins by source id).
+    let layered = load_layered(&cli.cwd);
+    for warning in &layered.warnings {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!("· ignoring config: {warning}"))
+        );
+    }
+    for path in &layered.paths {
+        eprintln!("{}", palette.dim(&format!("· config: {}", path.display())));
+    }
+    let config = layered.config;
 
     let mut entries = Vec::new();
     if config.tools.sources.is_empty() {
@@ -531,6 +603,23 @@ async fn build_catalog(cli: &Cli, palette: Palette) -> anyhow::Result<ToolCatalo
     }
 
     let catalog = ToolCatalog::build(entries).map_err(|error| anyhow::anyhow!("{error}"))?;
+    if cli.verbose {
+        for entry in catalog.entries() {
+            let source = entry.source();
+            let prefix = entry
+                .prefix()
+                .map_or_else(String::new, |prefix| format!(", prefix {prefix}"));
+            eprintln!(
+                "{}",
+                palette.dim(&format!(
+                    "· [verbose] source {} [{}]: {} tool(s){prefix}",
+                    source.id(),
+                    source.kind().as_str(),
+                    source.tools().len()
+                ))
+            );
+        }
+    }
     if catalog.is_empty() {
         eprintln!(
             "{}",
@@ -726,6 +815,7 @@ async fn run_repl(
     agent: &mut Agent,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     renderer: &mut Renderer,
+    log: &mut log::EventLog,
     faux: Option<&FauxProvider>,
     input: &InputHandle,
     mut session: Option<&mut session::Session>,
@@ -775,7 +865,7 @@ async fn run_repl(
             ))]);
         }
 
-        run_prompt(agent, rx, renderer, input_text.to_string()).await?;
+        run_prompt(agent, rx, renderer, log, input_text.to_string()).await?;
         if let Some(session) = session.as_deref_mut() {
             session.save(agent, renderer.palette);
         }
@@ -789,6 +879,7 @@ async fn run_prompt(
     agent: &mut Agent,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     renderer: &mut Renderer,
+    log: &mut log::EventLog,
     input: String,
 ) -> anyhow::Result<()> {
     let cancel = agent.cancel_token();
@@ -802,6 +893,7 @@ async fn run_prompt(
                 break;
             }
             Some(event) = rx.recv() => {
+                log.append(&event);
                 renderer.render(&event);
             }
             _ = tokio::signal::ctrl_c() => {
@@ -813,6 +905,7 @@ async fn run_prompt(
 
     // Drain any events that were queued right before completion.
     while let Ok(event) = rx.try_recv() {
+        log.append(&event);
         renderer.render(&event);
     }
     renderer.flush_line();

@@ -17,7 +17,7 @@ use rsagent_agent::{BreakerState, SourceHealth, ToolSource};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
 use crate::breakers::BreakerStore;
-use crate::config::{find_upward, Config, CONFIG_FILE};
+use crate::config::{find_upward, load_layered, Config, CONFIG_FILE};
 use crate::fs::write_atomic;
 use crate::render::Palette;
 use crate::Cli;
@@ -190,19 +190,19 @@ fn breaker_label(state: BreakerState, palette: Palette) -> String {
 async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
     // Seeding makes a persisted, still-cooling-down source show as unhealthy here too.
     let store = BreakerStore::load(&cli.cwd);
-    let config = match Config::load(&cli.cwd) {
-        Ok((config, path)) => {
-            match &path {
-                Some(path) => println!("配置：{}", path.display()),
-                None => println!("配置：未找到，使用内置来源"),
-            }
-            config
+    // Doctor reports the *effective* config: the user file layered under the project file.
+    let layered = load_layered(&cli.cwd);
+    if layered.paths.is_empty() {
+        println!("配置：未找到，使用内置来源");
+    } else {
+        for path in &layered.paths {
+            println!("配置：{}", path.display());
         }
-        Err(error) => {
-            println!("配置：无法读取（{error}），使用内置来源");
-            Config::default()
-        }
-    };
+    }
+    for warning in &layered.warnings {
+        println!("配置：{warning}");
+    }
+    let config = layered.config;
 
     if config.tools.sources.is_empty() {
         let source = crate::builtin_source(cli, None, palette);

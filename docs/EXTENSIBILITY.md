@@ -47,9 +47,9 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
 | 平台差异 | ✅ 收敛到 `platform.rs`（工作区唯一 `#[cfg]`） | — |
 | CI | ✅ 三平台矩阵（ubuntu / windows / macos） | — |
-| 配置 | ✅ `rsagent.toml`（`crates/rsagent/src/config.rs`），优先级 CLI > env > project > 默认 | 用户级配置待补 |
+| 配置 | ✅ 两层 `rsagent.toml`（用户级 + 项目级，`crates/rsagent/src/config.rs`），优先级 CLI > env > project > user > 默认 | — |
 | 项目指令 | ✅ `AGENTS.md` 并入 system prompt（`main.rs`） | — |
-| 机器可读输出 | 无 | 无 `--json` |
+| 机器可读输出 | ✅ `--json` 事件流（`AgentEvent` 派生 `Serialize`）；`--log <FILE>` 落盘同形 JSONL | — |
 | 稳定性标记 | `AgentEvent` / `StreamEvent` / `ErrorReason` 已 `#[non_exhaustive]` | 无公开 API 清单与 semver 承诺 |
 
 ---
@@ -179,9 +179,11 @@ at assembly time by `ToolCatalog`; the loop never learns where tools come from.
 
 ### 3.3 配置 · Configuration
 
-One file, `rsagent.toml`, project-local, with CLI flags overriding it. **已实现**
-（`crates/rsagent/src/config.rs`）；当前解析 `builtin` / `local` / `mcp-stdio` / `mcp-http`
-/ `skill` / `web` 六种 `kind`。
+**两个** `rsagent.toml`，按 id 分层合并：**用户级**（`$XDG_CONFIG_HOME/rsagent/`、
+`%APPDATA%\rsagent\` 或 `~/.config/rsagent/`；可用 `RSAGENT_USER_CONFIG` 覆盖）作为底层，
+**项目级**（自工作目录向上查找）作为上层，同 id 的项目条目覆盖用户条目。CLI 参数再覆盖
+两者。**已实现**（`crates/rsagent/src/config.rs`）；当前解析 `builtin` / `local` /
+`mcp-stdio` / `mcp-http` / `skill` / `web` 六种 `kind`。
 
 ```toml
 # rsagent.toml
@@ -234,8 +236,8 @@ required = ["city"]
 回复契约与 `local` 相同，见 README「The `skill` source」。`web` 来源把一个 HTTP 端点包装成
 一个工具（GET/HEAD 把参数放查询串，其余方法放 JSON body），见 README「The `web` source」。
 
-**优先级 MUST 为：CLI 参数 > 环境变量 > 项目配置 > 用户配置 > 内置默认。** 已实现
-前三档（用户级配置待补）；这条 MUST 写进 `--help` 与 README（§5）。
+**优先级 MUST 为：CLI 参数 > 环境变量 > 项目配置 > 用户配置 > 内置默认。** 四档已全部
+实现（`config::load_layered` 合并用户与项目两层）；这条 MUST 写进 `--help` 与 README（§5）。
 
 ### 3.4 命名与冲突 · Naming and collisions
 
@@ -392,8 +394,8 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 项 | 主流做法 | 本项目 | 决策 |
 | --- | --- | --- | --- |
 | 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
-| 配置优先级 | CLI > env > project > user | ✅ 已实现前三档并文档化（`rsagent.toml`，README） | **MUST 文档化**（§3.3） |
-| 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
+| 配置优先级 | CLI > env > project > user | ✅ 四档已实现并文档化：用户级 + 项目级 `rsagent.toml` 分层合并（`config::load_layered`，README） | **MUST 文档化**（§3.3） |
+| 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout；`--log <FILE>` 在任意模式下追加同形 JSONL 追踪 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封；`.jsonl` 后缀启用 JSONL 追加模式 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 ✅ |
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |

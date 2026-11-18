@@ -15,7 +15,8 @@ one version (`[workspace.package] version`). · 工作区遵循语义化版本�
 
 - **Pre-1.0 (`0.x`)**: a **minor** release (`0.2` → `0.3`) MAY contain breaking changes;
   a **patch** release (`0.2.1` → `0.2.2`) MUST NOT. Breaking changes are listed in the
-  changelog. · **1.0 之前**：**minor** 版本可含破坏性变更，**patch** 版本不得含。
+  [changelog](CHANGELOG.md). · **1.0 之前**：**minor** 版本可含破坏性变更，**patch** 版本
+  不得含。破坏性变更记录在[变更日志](CHANGELOG.md)中。
 - **Deprecation**: a deprecated item keeps working for **at least one minor release**
   with a warning, and is removed no earlier than the minor after that. · **弃用**：被弃用的
   项至少再保留一个 minor 版本并给出警告，最早在其后的 minor 中移除。
@@ -35,6 +36,7 @@ crate root, is **internal** and may change at any time. · 一个 crate 的公�
 | CLI flags and exit codes | `rsagent --help` | Semver |
 | `rsagent.toml` schema | [README](../README.md#tool-sources-rsagenttoml) | Semver |
 | `--json` event schema | [README](../README.md#json-output) | Semver (additive only) |
+| `--log` trace schema | [README](../README.md#event-log) | Semver (additive only) |
 | `local` / `skill` subprocess protocol (`protocol: 1`) | [EXTENSIBILITY §3](EXTENSIBILITY.md) | Versioned separately |
 
 Both crates are `#[non_exhaustive]` where a future variant is likely (events, stop
@@ -52,6 +54,10 @@ is therefore **not** a breaking change. · 两个 crate 在可能新增变体处
   fields. **Adding** a field or event kind is allowed within a minor version; **removing
   or renaming** one is breaking. · **`--json`**：每行一个 `AgentEvent`，`type` 内部标签 +
   camelCase 字段。minor 版本内**新增**字段或事件类型是允许的，**删除或改名**属破坏性变更。
+- **`--log`**: the same JSONL shape as `--json`, appended to a file, in every output mode.
+  It shares the `AgentEvent` schema, so the same additive-only rule applies. · **`--log`**：
+  与 `--json` 同形的 JSONL，追加写入文件，适用于任意输出模式；二者共用 `AgentEvent`
+  schema，故同样只允许增量变更。
 - **Subprocess protocol** (`local`, `skill`): the `protocol` number in the `--describe`
   reply gates compatibility, independently of the crate version. · **子进程协议**：以
   `--describe` 回复中的 `protocol` 号判断兼容性，与 crate 版本解耦。

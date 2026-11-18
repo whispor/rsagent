@@ -2,6 +2,7 @@
 
 use std::io::IsTerminal;
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use rsagent_agent::AgentEvent;
 use rsagent_ai::{AssistantMessage, ErrorReason, Message, StreamEvent};
@@ -96,6 +97,12 @@ pub(crate) struct Renderer {
     pub(crate) palette: Palette,
     /// Where progress goes and whether a trailing blank line is wanted.
     mode: OutputMode,
+    /// When set, emit extra diagnostics on stderr (`--verbose`).
+    verbose: bool,
+    /// The current turn number, for verbose timing.
+    turn: usize,
+    /// When the current turn started, for verbose timing.
+    turn_started: Option<Instant>,
 }
 
 impl Renderer {
@@ -106,6 +113,9 @@ impl Renderer {
             cwd,
             palette,
             mode: OutputMode::Interactive,
+            verbose: false,
+            turn: 0,
+            turn_started: None,
         }
     }
 
@@ -116,7 +126,21 @@ impl Renderer {
         self
     }
 
+    /// Emit extra diagnostics on stderr (`--verbose`).
+    #[must_use]
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "the verbosity flag is naturally boolean; a two-variant enum would add ceremony without clarity"
+    )]
+    pub(crate) fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
     pub(crate) fn render(&mut self, event: &AgentEvent) {
+        if self.verbose {
+            self.render_verbose(event);
+        }
         if self.mode == OutputMode::Json {
             self.render_json(event);
             return;
@@ -201,6 +225,48 @@ impl Renderer {
                     "{}",
                     self.palette.yellow(&format!(
                         "· 工具来源 `{source_id}`（{kind}）不可用：{reason}"
+                    ))
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit extra diagnostics on stderr when `--verbose` is set.
+    ///
+    /// Diagnostics always go to stderr, so they never contaminate the answer on stdout
+    /// or the JSON stream in `--json` mode.
+    fn render_verbose(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::TurnStart => {
+                self.turn += 1;
+                self.turn_started = Some(Instant::now());
+                eprintln!(
+                    "{}",
+                    self.palette
+                        .dim(&format!("· [verbose] turn {} start", self.turn))
+                );
+            }
+            AgentEvent::TurnEnd { .. } => {
+                if let Some(started) = self.turn_started.take() {
+                    eprintln!(
+                        "{}",
+                        self.palette.dim(&format!(
+                            "· [verbose] turn {} done in {} ms",
+                            self.turn,
+                            started.elapsed().as_millis()
+                        ))
+                    );
+                }
+            }
+            AgentEvent::ToolExecutionStart {
+                tool_name, args, ..
+            } => {
+                eprintln!(
+                    "{}",
+                    self.palette.dim(&format!(
+                        "· [verbose] call {tool_name} {}",
+                        truncate(&args.to_string(), 200)
                     ))
                 );
             }

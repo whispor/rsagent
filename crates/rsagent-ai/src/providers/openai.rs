@@ -84,6 +84,7 @@ impl Provider for OpenAiProvider {
         let body = build_request_body(&model, &context, &options);
         let extra_headers = options.headers;
         let max_retries = options.max_retries;
+        let client = self.core.client().clone();
 
         Box::pin(stream! {
             let mut parser = OpenAiStreamParser::new(&model);
@@ -101,7 +102,8 @@ impl Provider for OpenAiProvider {
             headers.extend(extra_headers);
 
             let response =
-                match super::http::send_with_retry(&url, &headers, &body, max_retries).await {
+                match super::http::send_with_retry(&client, &url, &headers, &body, max_retries).await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         yield StreamEvent::Error {
