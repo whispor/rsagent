@@ -25,9 +25,12 @@ one version (`[workspace.package] version`). · 工作区遵循语义化版本�
 
 A crate's public API is exactly what its crate root re-exports (`pub use`), plus its
 documented public items. Anything `pub(crate)`, and any module not reachable from the
-crate root, is **internal** and may change at any time. · 一个 crate 的公开 API 就是其根
+crate root, is **internal** and may change at any time. Public items carry doc comments,
+and CI builds the docs with warnings denied, so a missing doc or a broken intra-doc link
+fails the build. · 一个 crate 的公开 API 就是其根
 `pub use` 导出的内容加上有文档的公开项；`pub(crate)` 及从根不可达的模块均为**内部**实现，
-可随时变更。
+可随时变更。公开项均带文档注释，且 CI 以「警告即错误」构建文档，因此缺失文档或断链会让构建
+失败。
 
 | Surface | Where | Stability |
 | --- | --- | --- |

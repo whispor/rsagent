@@ -404,7 +404,7 @@ impl Tool for ListDirTool {
 ///
 /// Read-only: it never mutates the filesystem, so it needs no approval. Matching lines
 /// are reported as `path:line: text`, mirroring `grep -rn`. Build-output and vendor
-/// directories ([`SKIPPED_DIRS`]) are not descended into.
+/// directories (`SKIPPED_DIRS`) are not descended into.
 #[derive(Debug)]
 pub struct SearchTool;
 
@@ -488,7 +488,7 @@ impl Tool for SearchTool {
 /// Read-only, so it needs no approval. The syntax is small on purpose: `*` (within a
 /// segment), `?` (one character), and `**` (any number of segments, e.g. `**/*.rs`).
 /// A pattern without a `/` matches file names anywhere in the tree. Build-output and
-/// vendor directories ([`SKIPPED_DIRS`]) are not descended into.
+/// vendor directories (`SKIPPED_DIRS`) are not descended into.
 #[derive(Debug)]
 pub struct GlobTool;
 

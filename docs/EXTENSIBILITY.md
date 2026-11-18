@@ -502,6 +502,7 @@ Copy this into your PR description. · 复制到 PR 描述里。
 - [ ] `cargo fmt --all --check` 干净
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings` 零告警
 - [ ] `cargo test --workspace --locked` 全过
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` 无告警（无断链 / 无未文档化条目）
 - [ ] 公开 API 有文档；返回 `Result` 的有 `# Errors`
 - [ ] 用户可见的行为变化写进了 README / `docs/`
 ```

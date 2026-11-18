@@ -33,6 +33,25 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  # Public docs are part of the contract (see STABILITY.md), so a broken intra-doc link
+  # or an undocumented item must fail the build rather than be found by a reader later.
+  # One OS is enough: rustdoc output is not platform-specific.
+  # 公开文档是契约的一部分（见 STABILITY.md）：断链或未文档化的条目必须让构建失败，而不是
+  # 被读者事后发现。一个平台足矣——rustdoc 输出不随平台而变。
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+      - name: Build docs (warnings denied)
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   # The declared MSRV is a promise, so build the whole workspace on it. Kept separate
   # from `check` (which runs on stable) because rustfmt/clippy output is toolchain-
   # specific; only the plain compiler needs to hold at the floor.

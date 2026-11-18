@@ -81,6 +81,9 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 - Resuming a `.jsonl` session that ends in a truncated line (a crash mid-write) now says
   so on stderr. The partial record was already dropped and the file rewritten, but the
   loss was silent.
+- The `search` and `glob` tool docs linked a private constant, producing a `rustdoc`
+  warning. Public docs no longer link a private item, and CI now builds the docs with
+  warnings denied, so a broken intra-doc link fails the build instead of reaching a reader.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead

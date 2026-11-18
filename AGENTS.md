@@ -35,6 +35,7 @@ The full gate, all of it required:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
 Lints are strict on purpose (`Cargo.toml` `[workspace.lints]`, adapted from BeautifulRust):
