@@ -144,12 +144,28 @@ async fn a_program_that_cannot_be_run_fails_to_load() {
 
 #[tokio::test]
 async fn a_program_that_does_not_speak_the_protocol_fails_to_load() {
-    // `echo` exists on every platform, but its output is not a describe response.
-    let error = LocalSource::new("chatty", "echo", vec!["hello".to_string()], None)
+    // A program that runs and prints something, but not a describe response. It is a
+    // written fixture rather than a bare `echo`: `echo` is a shell builtin, so on Windows
+    // it resolves to no executable at all (and under MSYS to one that may not start).
+    let dir = temp_dir("chatty");
+    let (program, args) = if cfg!(windows) {
+        let path = dir.join("chatty.cmd");
+        std::fs::write(&path, "@echo off\r\necho hello\r\n").expect("write chatty.cmd");
+        (
+            "cmd".to_string(),
+            vec!["/C".to_string(), path.display().to_string()],
+        )
+    } else {
+        let path = dir.join("chatty.sh");
+        std::fs::write(&path, "#!/bin/sh\necho hello\n").expect("write chatty.sh");
+        ("sh".to_string(), vec![path.display().to_string()])
+    };
+    let error = LocalSource::new("chatty", program, args, None)
         .await
         .expect_err("non-JSON output must fail");
 
     assert!(error.contains("did not print JSON"), "{error}");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]
