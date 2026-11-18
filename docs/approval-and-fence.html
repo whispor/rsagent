@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>两道防线：审批与路径围栏 · Approver &amp; PathFence — rsagent</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --bg-grad: radial-gradient(1200px 600px at 15% -10%, #e8ecff 0%, transparent 60%),
+               radial-gradient(900px 500px at 100% 0%, #e6fbf3 0%, transparent 55%);
+    --panel: #ffffff;
+    --panel-2: #fbfcfe;
+    --ink: #171a21;
+    --ink-2: #40485a;
+    --muted: #5c6478;
+    --line: #e4e7ee;
+    --line-2: #eef0f5;
+    --code-bg: #f2f4f8;
+    --code-ink: #2b3242;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.14);
+
+    --cli:   #6366f1;
+    --agent: #0ea5e9;
+    --ai:    #f59e0b;
+    --tool:  #10b981;
+    --warn:  #ef4444;
+    --cli-ink:   #4338ca;
+    --agent-ink: #0369a1;
+    --ai-ink:    #b45309;
+    --tool-ink:  #047857;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1117;
+      --bg-grad: radial-gradient(1200px 600px at 15% -10%, #1a2050 0%, transparent 60%),
+                 radial-gradient(900px 500px at 100% 0%, #07332a 0%, transparent 55%);
+      --panel: #161a22;
+      --panel-2: #12161d;
+      --ink: #e7eaf0;
+      --ink-2: #c2c9d6;
+      --muted: #8b95a8;
+      --line: #242a35;
+      --line-2: #1d222c;
+      --code-bg: #10141b;
+      --code-ink: #cdd5e4;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+      --cli:   #818cf8;
+      --agent: #38bdf8;
+      --ai:    #fbbf24;
+      --tool:  #34d399;
+      --warn:  #f87171;
+      --cli-ink:   #a5b4fc;
+      --agent-ink: #7dd3fc;
+      --ai-ink:    #fcd34d;
+      --tool-ink:  #6ee7b7;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image: var(--bg-grad);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                 "Liberation Mono", monospace;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 44px 22px 80px; }
+
+  /* ---------- header ---------- */
+  header.hero { margin-bottom: 26px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 650; margin-bottom: 14px;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tool); }
+  h1 {
+    margin: 0 0 6px; font-size: clamp(25px, 4.2vw, 38px); line-height: 1.18;
+    letter-spacing: -0.022em; font-weight: 760;
+  }
+  h1 .en { display: block; font-size: .52em; font-weight: 600; color: var(--muted);
+           letter-spacing: -0.01em; margin-top: 8px; }
+  .lede { margin: 16px 0 0; max-width: 76ch; color: var(--ink-2); font-size: 15.5px; }
+  .lede code { background: var(--code-bg); color: var(--code-ink); padding: 1px 6px;
+               border-radius: 5px; font-size: .88em; }
+
+  /* ---------- diagram cards ---------- */
+  .figcard {
+    margin: 22px 0 30px; padding: 20px 22px; border: 1px solid var(--line);
+    border-radius: 16px; background: var(--panel); box-shadow: var(--shadow);
+  }
+  .figcard .cap { font-size: 12.5px; color: var(--muted); margin-top: 12px; }
+  svg.fig { width: 100%; height: auto; display: block; }
+
+  h2.section {
+    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 34px 0 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2.section::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  /* ---------- prose ---------- */
+  .prose { color: var(--ink-2); font-size: 14.5px; }
+  .prose p { margin: 0 0 12px; }
+  .prose p:last-child { margin-bottom: 0; }
+  .prose code { background: var(--code-bg); color: var(--code-ink); padding: 1.5px 6px;
+                border-radius: 5px; font-size: .88em; }
+  .fn { color: var(--ink); font-weight: 600; }
+
+  .callout {
+    margin: 14px 0; padding: 10px 13px; border-radius: 10px; font-size: 13.5px;
+    border-left: 3px solid var(--ai); background: color-mix(in srgb, var(--ai) 8%, var(--panel));
+    color: var(--ink-2);
+  }
+  .callout.warn { border-left-color: var(--warn);
+                  background: color-mix(in srgb, var(--warn) 8%, var(--panel)); }
+  .callout.good { border-left-color: var(--tool);
+                  background: color-mix(in srgb, var(--tool) 8%, var(--panel)); }
+  .callout code { background: var(--code-bg); color: var(--code-ink); padding: 1px 5px;
+                  border-radius: 4px; font-size: .88em; }
+
+  /* ---------- mode cards ---------- */
+  .modes { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 13px; margin-top: 6px; }
+  @media (max-width: 760px) { .modes { grid-template-columns: 1fr; } }
+  .mode { border: 1px solid var(--line); border-radius: 13px; padding: 13px 15px;
+          background: var(--panel-2); box-shadow: var(--shadow); }
+  .mode h4 { margin: 0 0 3px; font-size: 14.5px; letter-spacing: -.008em; }
+  .mode .when { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .mode .when code, .mode p code { background: var(--code-bg); color: var(--code-ink);
+          padding: 1px 5px; border-radius: 4px; font-size: .86em; }
+  .mode p { margin: 0; font-size: 13px; color: var(--ink-2); }
+  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+         text-transform: uppercase; padding: 2px 7px; border-radius: 999px; margin-bottom: 8px; }
+
+  /* ---------- matrix ---------- */
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.matrix th, table.matrix td { text-align: left; padding: 9px 10px;
+        border-bottom: 1px solid var(--line-2); }
+  table.matrix thead th { color: var(--muted); font-size: 11px; letter-spacing: .06em;
+        text-transform: uppercase; font-weight: 700; }
+  table.matrix tbody tr:last-child td { border-bottom: 0; }
+  table.matrix code { background: var(--code-bg); color: var(--code-ink);
+        padding: 1px 6px; border-radius: 5px; font-size: .87em; }
+  table.matrix td.c { text-align: center; }
+  .yes { color: var(--tool-ink); font-weight: 700; }
+  .deny { color: var(--warn); font-weight: 700; }
+  .dash { color: var(--muted); }
+  .kind { font-size: 11.5px; color: var(--muted); }
+
+  /* ---------- sources ---------- */
+  ul.src { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  ul.src li { padding: 5px 0; color: var(--muted); display: flex; gap: 8px; }
+  ul.src li::before { content: "›"; color: var(--ai); font-weight: 700; }
+  ul.src code { color: var(--ink-2); }
+
+  footer.foot {
+    margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 18px;
+  }
+  footer.foot code { color: var(--ink-2); }
+  a { color: var(--agent-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow"><span class="dot"></span>rsagent-agent · tool.rs · approval.rs</div>
+    <h1>
+      两道防线：审批与路径围栏
+      <span class="en">Two Lines of Defense — who guards <code>bash</code>, who guards <code>read_file</code></span>
+    </h1>
+    <p class="lede">
+      模型能调用的工具，有的只读、有的会写盘、有的能跑任意命令。rsagent 用<b>两条互补的防线</b>兜住它们：
+      <code>Approver</code> 在<b>调用前</b>问「要不要执行」，<code>PathFence</code> 在<b>只读工具解析路径时</b>问「有没有越界」。
+      下面每个类名、每个方法名都取自真实代码，不是示意。
+    </p>
+  </header>
+
+  <!-- ============ OVERVIEW ============ -->
+  <div class="figcard">
+    <svg class="fig" viewBox="0 0 900 200" role="img"
+         aria-label="工具调用流水线：预检、审批闸门、执行、结果">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/>
+        </marker>
+      </defs>
+
+      <!-- stage 1 -->
+      <rect x="20" y="40" width="176" height="66" rx="12"
+            style="fill: color-mix(in srgb, var(--cli) 12%, var(--panel)); stroke: var(--cli); stroke-width:1.6"/>
+      <text x="108" y="66" text-anchor="middle" style="fill: var(--ink); font: 700 14.5px -apple-system,Segoe UI,sans-serif">① 预检</text>
+      <text x="108" y="87" text-anchor="middle" style="fill: var(--muted); font: 500 11.5px ui-monospace,monospace">run_tool_calls</text>
+
+      <!-- stage 2 -->
+      <rect x="236" y="40" width="196" height="66" rx="12"
+            style="fill: color-mix(in srgb, var(--agent) 13%, var(--panel)); stroke: var(--agent); stroke-width:1.6"/>
+      <text x="334" y="66" text-anchor="middle" style="fill: var(--ink); font: 700 14.5px -apple-system,Segoe UI,sans-serif">② 审批闸门</text>
+      <text x="334" y="87" text-anchor="middle" style="fill: var(--muted); font: 500 11.5px ui-monospace,monospace">Approver</text>
+
+      <!-- stage 3 -->
+      <rect x="472" y="40" width="196" height="66" rx="12"
+            style="fill: color-mix(in srgb, var(--tool) 13%, var(--panel)); stroke: var(--tool); stroke-width:1.6"/>
+      <text x="570" y="66" text-anchor="middle" style="fill: var(--ink); font: 700 14.5px -apple-system,Segoe UI,sans-serif">③ 执行</text>
+      <text x="570" y="87" text-anchor="middle" style="fill: var(--muted); font: 500 11.5px ui-monospace,monospace">Tool::execute</text>
+
+      <!-- stage 4 -->
+      <rect x="708" y="40" width="172" height="66" rx="12"
+            style="fill: color-mix(in srgb, var(--ai) 14%, var(--panel)); stroke: var(--ai); stroke-width:1.6"/>
+      <text x="794" y="66" text-anchor="middle" style="fill: var(--ink); font: 700 14.5px -apple-system,Segoe UI,sans-serif">④ 结果</text>
+      <text x="794" y="87" text-anchor="middle" style="fill: var(--muted); font: 500 11.5px ui-monospace,monospace">ToolResult</text>
+
+      <!-- arrows -->
+      <line x1="196" y1="73" x2="232" y2="73" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+      <line x1="432" y1="73" x2="468" y2="73" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+      <line x1="668" y1="73" x2="704" y2="73" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#ar)"/>
+
+      <text x="214" y="63" text-anchor="middle" style="fill: var(--muted); font: 600 10px ui-monospace,monospace">call</text>
+      <text x="450" y="63" text-anchor="middle" style="fill: var(--muted); font: 600 10px ui-monospace,monospace">allow?</text>
+      <text x="686" y="63" text-anchor="middle" style="fill: var(--muted); font: 600 10px ui-monospace,monospace">content</text>
+
+      <!-- annotations -->
+      <circle cx="30" cy="146" r="3.5" style="fill: var(--agent)"/>
+      <text x="44" y="151" style="fill: var(--ink-2); font: 500 13px -apple-system,Segoe UI,sans-serif">
+        审批发生在「开始执行」<tspan style="font-weight:700">之前</tspan>：顺序预检，先问后跑——UI 不会先显示「执行中」再回头问你。
+      </text>
+      <circle cx="30" cy="176" r="3.5" style="fill: var(--tool)"/>
+      <text x="44" y="181" style="fill: var(--ink-2); font: 500 13px -apple-system,Segoe UI,sans-serif">
+        围栏只作用于<tspan style="font-weight:700">只读工具</tspan>的路径解析：<tspan style="font-family:ui-monospace,monospace">canonicalize</tspan> 之后必须仍在工作目录内。
+      </text>
+    </svg>
+    <div class="cap">同一条调用链上的两个检查点，位置不同、职责也不同：审批管「要不要做」，围栏管「能不能碰」。详见 <code>crates/rsagent-agent/src/tool.rs</code> 与 <code>approval.rs</code>。</div>
+  </div>
+
+  <!-- ============ APPROVER ============ -->
+  <h2 class="section">防线一 · 审批闸门 · Approver</h2>
+
+  <div class="figcard">
+    <svg class="fig" viewBox="0 0 900 384" role="img"
+         aria-label="审批决策流程：requires_approval、needs_prompt、approve 与三个分支">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agent)"/>
+        </marker>
+        <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/>
+        </marker>
+        <marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/>
+        </marker>
+      </defs>
+
+      <!-- main column nodes -->
+      <g>
+        <rect x="40" y="16" width="290" height="32" rx="9"
+              style="fill: color-mix(in srgb, var(--cli) 12%, var(--panel)); stroke: var(--cli); stroke-width:1.4"/>
+        <text x="56" y="37" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">tool_call（id / name / args）</text>
+
+        <rect x="40" y="60" width="290" height="32" rx="9"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="56" y="81" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">requires_approval()?</text>
+
+        <rect x="40" y="104" width="290" height="32" rx="9"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="56" y="125" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">needs_prompt()?</text>
+
+        <rect x="40" y="148" width="290" height="32" rx="9"
+              style="fill: color-mix(in srgb, var(--agent) 12%, var(--panel)); stroke: var(--agent); stroke-width:1.4"/>
+        <text x="56" y="169" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">ToolApprovalRequest ▸ 事件</text>
+
+        <rect x="40" y="192" width="290" height="32" rx="9"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="56" y="213" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">approve() · Ask 模式读 y / n / a</text>
+
+        <rect x="40" y="236" width="290" height="32" rx="9"
+              style="fill: color-mix(in srgb, var(--agent) 12%, var(--panel)); stroke: var(--agent); stroke-width:1.4"/>
+        <text x="56" y="257" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">ToolApprovalResponse ▸ 事件</text>
+
+        <rect x="40" y="280" width="290" height="32" rx="9"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="56" y="301" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">allowed?</text>
+
+        <rect x="40" y="324" width="290" height="32" rx="9"
+              style="fill: color-mix(in srgb, var(--tool) 13%, var(--panel)); stroke: var(--tool); stroke-width:1.4"/>
+        <text x="56" y="345" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">ToolExecutionStart → execute()</text>
+      </g>
+
+      <!-- vertical arrows -->
+      <g style="stroke: var(--agent); stroke-width:1.5">
+        <line x1="185" y1="48"  x2="185" y2="56"  marker-end="url(#ar2)"/>
+        <line x1="185" y1="92"  x2="185" y2="100" marker-end="url(#ar2)"/>
+        <line x1="185" y1="136" x2="185" y2="144" marker-end="url(#ar2)"/>
+        <line x1="185" y1="180" x2="185" y2="188" marker-end="url(#ar2)"/>
+        <line x1="185" y1="224" x2="185" y2="232" marker-end="url(#ar2)"/>
+        <line x1="185" y1="268" x2="185" y2="276" marker-end="url(#ar2)"/>
+        <line x1="185" y1="312" x2="185" y2="320" marker-end="url(#ar2)"/>
+      </g>
+
+      <!-- branch: not required -->
+      <line x1="330" y1="76" x2="560" y2="76" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#arm)"/>
+      <text x="345" y="70" style="fill: var(--muted); font: 600 10.5px ui-monospace,monospace">false</text>
+      <rect x="564" y="60" width="300" height="32" rx="9"
+            style="fill: color-mix(in srgb, var(--tool) 10%, var(--panel)); stroke: var(--tool); stroke-width:1.3; stroke-dasharray:4 3"/>
+      <text x="580" y="81" style="fill: var(--ink-2); font: 600 12.5px ui-monospace,monospace">直接执行（只读工具）</text>
+
+      <!-- branch: no prompt needed -->
+      <line x1="330" y1="120" x2="560" y2="120" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#arm)"/>
+      <text x="345" y="114" style="fill: var(--muted); font: 600 10.5px ui-monospace,monospace">false</text>
+      <rect x="564" y="104" width="300" height="32" rx="9"
+            style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.3; stroke-dasharray:4 3"/>
+      <text x="580" y="125" style="fill: var(--ink-2); font: 600 12.5px ui-monospace,monospace">静默 approve()，不发 Request 事件</text>
+
+      <!-- branch: denied -->
+      <line x1="330" y1="296" x2="560" y2="296" style="stroke: var(--warn); stroke-width:1.5" marker-end="url(#arw)"/>
+      <text x="345" y="290" style="fill: var(--warn); font: 600 10.5px ui-monospace,monospace">false</text>
+      <rect x="564" y="280" width="300" height="32" rx="9"
+            style="fill: color-mix(in srgb, var(--warn) 9%, var(--panel)); stroke: var(--warn); stroke-width:1.3"/>
+      <text x="580" y="301" style="fill: var(--ink-2); font: 600 12.5px ui-monospace,monospace">被拒绝的 ToolResult（is_error）</text>
+
+      <!-- note -->
+      <text x="564" y="200" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">审批器决定「问不问」与</text>
+      <text x="564" y="220" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">「准不准」两件事——</text>
+      <text x="564" y="240" style="fill: var(--muted); font: 500 12px -apple-system,Segoe UI,sans-serif">AllowAll / DenyAll 两者都答「否」。</text>
+    </svg>
+    <div class="cap">顺序预检每一步都先于执行；<code>needs_prompt()</code> 为假时（如 <code>AllowAll</code>、已按过 <code>a</code>）跳过 <code>ToolApprovalRequest</code>，界面就不弹提示。</div>
+  </div>
+
+  <div class="prose">
+    <p><code>Approver</code> 只有两个方法：<span class="fn">approve(tool_name, args) -&gt; bool</span> 决定准不准，
+       <span class="fn">needs_prompt(tool_name) -&gt; bool</span> 决定要不要让界面弹一次提示。默认实现让每一步都弹；
+       一个"自己就能拍板"的审批器（全允许、全拒绝、或用户已说"别问了"）把 <code>needs_prompt</code> 返回 <code>false</code>，
+       于是循环干脆不发那条请求事件。</p>
+  </div>
+
+  <div class="callout good">
+    <b>只读工具根本不进这道闸门。</b> <code>requires_approval()</code> 缺省是 <code>false</code>，
+    只有会改状态或产生外部副作用的工具（<code>write_file</code>、<code>edit_file</code>、<code>bash</code>、<code>webfetch</code>）
+    才把它置为 <code>true</code>——权限是"显式申请"的，不是"默认放行后补票"。
+  </div>
+
+  <h3 style="font-size:14px;margin:22px 0 10px;">CLI 的三种回答方式</h3>
+  <div class="modes">
+    <div class="mode">
+      <span class="tag" style="color:var(--tool-ink);background:color-mix(in srgb,var(--tool) 15%,var(--panel))">Auto</span>
+      <h4>全允许</h4>
+      <div class="when">触发：<code>--yes</code></div>
+      <p>每个调用直接放行，不弹提示。适合你已信任这次任务的场景。</p>
+    </div>
+    <div class="mode">
+      <span class="tag" style="color:var(--agent-ink);background:color-mix(in srgb,var(--agent) 15%,var(--panel))">Ask</span>
+      <h4>逐个问</h4>
+      <div class="when">触发：交互式会话（默认）</div>
+      <p>读终端回答：<code>y</code>/<code>yes</code> 放行，<code>a</code>/<code>all</code> 放行并<b>记住本会话不再问</b>，其余算拒绝。</p>
+    </div>
+    <div class="mode">
+      <span class="tag" style="color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,var(--panel))">Deny</span>
+      <h4>全拒绝</h4>
+      <div class="when">触发：<code>--print</code> 且未给 <code>--yes</code></div>
+      <p>拒绝一切需审批的调用并提示原因，让自动化脚本<b>永远不会被一个意料之外的写操作惊到</b>。</p>
+    </div>
+  </div>
+
+  <!-- ============ FENCE ============ -->
+  <h2 class="section">防线二 · 路径围栏 · PathFence</h2>
+
+  <div class="figcard">
+    <svg class="fig" viewBox="0 0 900 360" role="img"
+         aria-label="路径围栏：只读工具必须留在工作目录内，越界与符号链接逃逸被拒绝">
+      <defs>
+        <marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--tool)"/>
+        </marker>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/>
+        </marker>
+      </defs>
+
+      <!-- fence -->
+      <rect x="30" y="30" width="470" height="300" rx="16"
+            style="fill: color-mix(in srgb, var(--tool) 6%, var(--panel)); stroke: var(--tool); stroke-width:2; stroke-dasharray:7 5"/>
+      <text x="50" y="56" style="fill: var(--tool-ink); font: 700 12.5px -apple-system,Segoe UI,sans-serif">工作目录 · fence root（cwd）</text>
+
+      <!-- read tools 2x2 -->
+      <g>
+        <rect x="52" y="74" width="200" height="38" rx="9"
+              style="fill: var(--panel); stroke: var(--line); stroke-width:1.3"/>
+        <text x="70" y="98" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">read_file</text>
+        <text x="238" y="98" text-anchor="end" style="fill: var(--tool-ink); font: 700 13px -apple-system,sans-serif">✓</text>
+
+        <rect x="276" y="74" width="200" height="38" rx="9"
+              style="fill: var(--panel); stroke: var(--line); stroke-width:1.3"/>
+        <text x="294" y="98" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">list_dir</text>
+        <text x="462" y="98" text-anchor="end" style="fill: var(--tool-ink); font: 700 13px -apple-system,sans-serif">✓</text>
+
+        <rect x="52" y="120" width="200" height="38" rx="9"
+              style="fill: var(--panel); stroke: var(--line); stroke-width:1.3"/>
+        <text x="70" y="144" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">search</text>
+        <text x="238" y="144" text-anchor="end" style="fill: var(--tool-ink); font: 700 13px -apple-system,sans-serif">✓</text>
+
+        <rect x="276" y="120" width="200" height="38" rx="9"
+              style="fill: var(--panel); stroke: var(--line); stroke-width:1.3"/>
+        <text x="294" y="144" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">glob</text>
+        <text x="462" y="144" text-anchor="end" style="fill: var(--tool-ink); font: 700 13px -apple-system,sans-serif">✓</text>
+      </g>
+
+      <text x="52" y="184" style="fill: var(--muted); font: 500 11.5px -apple-system,sans-serif">这四个都走 <tspan style="font-family:ui-monospace,monospace">context.resolve_within(path)</tspan></text>
+
+      <!-- allowed path -->
+      <line x1="52" y1="206" x2="96" y2="206" style="stroke: var(--tool); stroke-width:1.6" marker-end="url(#arg)"/>
+      <text x="106" y="211" style="fill: var(--tool-ink); font: 600 12.5px ui-monospace,monospace">notes/todo.md</text>
+      <text x="248" y="211" style="fill: var(--tool-ink); font: 700 12.5px -apple-system,sans-serif">→ 允许</text>
+
+      <!-- rejected: dotdot -->
+      <line x1="52" y1="238" x2="96" y2="238" style="stroke: var(--warn); stroke-width:1.6" marker-end="url(#arr)"/>
+      <text x="106" y="243" style="fill: var(--warn); font: 600 12.5px ui-monospace,monospace">../../etc/passwd</text>
+      <text x="268" y="243" style="fill: var(--warn); font: 700 12.5px -apple-system,sans-serif">→ 拒绝</text>
+
+      <!-- rejected: symlink -->
+      <line x1="52" y1="270" x2="96" y2="270" style="stroke: var(--warn); stroke-width:1.6" marker-end="url(#arr)"/>
+      <text x="106" y="275" style="fill: var(--warn); font: 600 12.5px ui-monospace,monospace">link → /etc/shadow</text>
+      <text x="268" y="275" style="fill: var(--warn); font: 700 12.5px -apple-system,sans-serif">→ 拒绝</text>
+
+      <!-- escape arrow crossing the boundary -->
+      <path d="M440,270 C500,270 512,150 520,150" style="fill:none; stroke: var(--warn); stroke-width:1.6; stroke-dasharray:5 4" marker-end="url(#arr)"/>
+      <text x="366" y="300" style="fill: var(--muted); font: 500 11px -apple-system,sans-serif">越界即被拦下</text>
+
+      <!-- right: algorithm -->
+      <g>
+        <rect x="580" y="70" width="290" height="58" rx="11"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="598" y="94" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">1 · resolve(path)</text>
+        <text x="598" y="114" style="fill: var(--muted); font: 500 12px -apple-system,sans-serif">相对路径拼到工作目录</text>
+
+        <rect x="580" y="152" width="290" height="58" rx="11"
+              style="fill: var(--panel-2); stroke: var(--line); stroke-width:1.4"/>
+        <text x="598" y="176" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">2 · canonicalize()</text>
+        <text x="598" y="196" style="fill: var(--muted); font: 500 12px -apple-system,sans-serif">展开 .. 与符号链接，得到真实路径</text>
+
+        <rect x="580" y="234" width="290" height="70" rx="11"
+              style="fill: color-mix(in srgb, var(--tool) 10%, var(--panel)); stroke: var(--tool); stroke-width:1.4"/>
+        <text x="598" y="258" style="fill: var(--ink); font: 600 13px ui-monospace,monospace">3 · starts_with(boundary)?</text>
+        <text x="598" y="278" style="fill: var(--tool-ink); font: 600 12px -apple-system,sans-serif">是 → 通过</text>
+        <text x="598" y="296" style="fill: var(--warn); font: 600 12px -apple-system,sans-serif">否 → 报错并提示 --allow-outside-cwd</text>
+
+        <line x1="725" y1="128" x2="725" y2="148" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#arg)"/>
+        <line x1="725" y1="210" x2="725" y2="230" style="stroke: var(--muted); stroke-width:1.5" marker-end="url(#arg)"/>
+      </g>
+    </svg>
+    <div class="cap">围栏<b>先解析、再判定</b>：<code>..</code> 与符号链接都在 <code>canonicalize()</code> 里被展开，所以"绕一圈逃出去"和"直接写绝对路径"一样会被拦下。</div>
+  </div>
+
+  <div class="prose">
+    <p>围栏由 <code>ToolContext</code> 上的一个可选 <code>fence</code> 承载，只在
+       <span class="fn">resolve_within(path)</span> 里生效：没有围栏时它直接返回 <code>resolve(path)</code>，
+       有围栏时才做 <code>canonicalize</code> + <code>starts_with</code> 两步检查。
+       路径不存在会明确报错，而不是"默默放行"。</p>
+  </div>
+
+  <div class="callout warn">
+    <b>围栏不是沙箱。</b>它只约束<b>只读工具</b>读哪里的文件。<code>write_file</code> / <code>edit_file</code> 走的是
+    <code>context.resolve()</code>（<b>不受围栏限制</b>），它们靠的是<b>审批</b>；而 <code>bash</code> 能跑任意命令，
+    只能靠审批（外加 <code>--tools</code> / <code>--no-bash</code> 干脆把它关掉）。换句话说：
+    <b>只读靠围栏、写靠审批、<code>bash</code> 靠你自己盯</b>。
+  </div>
+
+  <!-- ============ MATRIX ============ -->
+  <h2 class="section">一张表看清谁守哪段 · Who guards what</h2>
+  <div class="figcard" style="margin-top:0;">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>内置工具</th>
+          <th>类型</th>
+          <th class="c">路径围栏<br><span class="kind">resolve_within</span></th>
+          <th class="c">审批<br><span class="kind">requires_approval</span></th>
+          <th class="c">顺序执行<br><span class="kind">is_sequential</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>read_file</code></td><td class="kind">只读</td><td class="c yes">✓</td><td class="c dash">—</td><td class="c dash">—</td></tr>
+        <tr><td><code>list_dir</code></td><td class="kind">只读</td><td class="c yes">✓</td><td class="c dash">—</td><td class="c dash">—</td></tr>
+        <tr><td><code>search</code></td><td class="kind">只读</td><td class="c yes">✓</td><td class="c dash">—</td><td class="c dash">—</td></tr>
+        <tr><td><code>glob</code></td><td class="kind">只读</td><td class="c yes">✓</td><td class="c dash">—</td><td class="c dash">—</td></tr>
+        <tr><td><code>write_file</code></td><td class="kind">写入</td><td class="c dash">—</td><td class="c deny">需审批</td><td class="c yes">✓</td></tr>
+        <tr><td><code>edit_file</code></td><td class="kind">写入</td><td class="c dash">—</td><td class="c deny">需审批</td><td class="c yes">✓</td></tr>
+        <tr><td><code>bash</code></td><td class="kind">副作用</td><td class="c dash">—</td><td class="c deny">需审批</td><td class="c yes">✓</td></tr>
+        <tr><td><code>webfetch</code></td><td class="kind">网络</td><td class="c dash">—</td><td class="c deny">需审批</td><td class="c dash">—</td></tr>
+      </tbody>
+    </table>
+    <div class="cap">"顺序执行"栏为 <code>✓</code> 的工具，只要出现在同一批调用里，整批都会退化为串行——避免多个写操作互相踩踏。</div>
+  </div>
+
+  <!-- ============ SOURCES ============ -->
+  <h2 class="section">源码坐标 · Where to look</h2>
+  <div class="figcard" style="margin-top:0;">
+    <ul class="src">
+      <li><code>rsagent-agent/src/approval.rs</code> — <code>Approver</code> 特征、<code>AllowAll</code> / <code>DenyAll</code></li>
+      <li><code>rsagent-agent/src/agent.rs</code> — <code>check_approval()</code> 与顺序预检 <code>run_tool_calls()</code></li>
+      <li><code>rsagent-agent/src/tool.rs</code> — <code>PathFence</code>、<code>ToolContext::resolve_within()</code></li>
+      <li><code>rsagent-agent/src/tools.rs</code> — 各内置工具的 <code>requires_approval()</code> / <code>is_sequential()</code></li>
+      <li><code>rsagent/src/main.rs</code> — CLI 的 <code>ApprovalMode</code> 与 <code>CliApprover</code></li>
+    </ul>
+  </div>
+
+  <footer class="foot">
+    <span>本页所有类名、方法名与默认值均取自仓库真实代码，非示意。</span>
+    <span>· 姊妹篇：<a href="./tool-call-journey.html">一次工具调用的完整旅程</a></span>
+    <span>· 架构总览 <code>docs/ARCHITECTURE.md</code></span>
+  </footer>
+
+</div>
+</body>
+</html>

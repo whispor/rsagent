@@ -224,6 +224,8 @@
     color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 18px;
   }
   footer.foot code { color: var(--ink-2); }
+  a { color: var(--agent-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -346,11 +348,14 @@
               <span class="title">每个回合的开场：插队消息 + 裁剪上下文</span>
             </div>
             <div class="body">
-              <p><span class="fn">run_turns()</span> 每轮先做两件事：<span class="fn">inject_steering()</span>
-                 把排队的插队消息写进对话记录；<span class="fn">compact_context()</span> 若超出模型上下文预算
+              <p><span class="fn">run_turns()</span> 每轮先做三件事：<span class="fn">probe_health()</span>
+                 探一次各来源的健康（熔断器刚跳闸的来源会在此被点名，见右侧 <code>SourceUnhealthy</code>）；
+                 <span class="fn">inject_steering()</span> 把排队的插队消息写进对话记录；
+                 <span class="fn">compact_context()</span> 若超出模型上下文预算
                  （窗口的 3/4），就<b>按整回合</b>丢弃最旧的消息——首回合与最新回合永远保留，
                  且工具调用不会与它的结果被拆散。</p>
               <div class="events"><span class="lbl">发出</span>
+                <span class="chip">SourceUnhealthy</span><span class="chip">（仅在跳闸时）</span>
                 <span class="chip">ContextCompacted</span><span class="chip">（仅在裁剪时）</span>
                 <span class="chip hot">TurnStart</span>
               </div>
@@ -562,6 +567,7 @@
           <li><span class="e">ToolApprovalRequest</span><span class="w">请求审批</span></li>
           <li><span class="e">ToolApprovalResponse</span><span class="w">审批结果</span></li>
           <li><span class="e">ContextCompacted</span><span class="w">裁剪上下文</span></li>
+          <li><span class="e">SourceUnhealthy</span><span class="w">来源熔断</span></li>
         </ul>
       </div>
 
@@ -571,6 +577,8 @@
           <li><code>rsagent-agent/src/agent.rs</code> — 循环本体 <code>run_turns</code></li>
           <li><code>rsagent-agent/src/event.rs</code> — 全部 <code>AgentEvent</code></li>
           <li><code>rsagent-agent/src/tool.rs</code> — <code>Tool</code> / <code>ToolResult</code></li>
+          <li><code>rsagent-agent/src/breaker.rs</code> — 熔断器 <code>CircuitBreaker</code></li>
+          <li><code>rsagent-agent/src/source.rs</code> — <code>ToolSource</code> / <code>UnhealthySource</code></li>
           <li><code>rsagent-ai/src/provider.rs</code> — <code>Provider</code> / <code>Models</code></li>
           <li><code>rsagent-ai/src/event.rs</code> — <code>StreamEvent</code></li>
         </ul>
@@ -599,6 +607,7 @@ answer: That sentence has 4 words.</pre>
 
   <footer class="foot">
     <span>本页所有函数名与事件名均取自仓库真实代码，非示意。</span>
+    <span>· 姊妹篇：<a href="./approval-and-fence.html">两道防线：审批与路径围栏</a></span>
     <span>· 架构总览 <code>docs/ARCHITECTURE.md</code></span>
     <span>· 可运行示例 <code>crates/rsagent-agent/examples/</code></span>
   </footer>

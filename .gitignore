@@ -7,3 +7,7 @@
 .rsagent-session.json
 # Persisted circuit-breaker state, written beside the working directory.
 .rsagent-breakers.json
+
+# App Publishing artifacts (machine-local publish markers/records).
+*.genie
+.workbuddy/applications.yaml
