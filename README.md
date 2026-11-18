@@ -25,6 +25,8 @@ New to the code? Three entry points. · 初次读代码？三个入口。
   adding a tool, provider, tool source, or platform path, plus the invariants a change
   must not break and the PR checklist. · 新增工具 / 提供商 / 工具来源 / 平台适配的标准
   流程、必须遵守的不变量，以及提交前检查清单。
+- **[Stability · 稳定性](STABILITY.md)** — the versioning promise, the public API, the
+  MSRV, and the no-telemetry statement. · 版本承诺、公开 API、MSRV，以及不收集遥测的声明。
 - **[The life of a tool call · 一次工具调用的完整旅程](docs/tool-call-journey.html)** —
   a visual walkthrough of one turn, step by step, with the real function and event names.
   Open the file in a browser. · 一个回合的逐步可视化讲解，标注真实的函数名与事件名。
@@ -495,6 +497,12 @@ output and log files stay clean.
 
 ## Notes and limitations
 
+- **No telemetry.** rsagent collects nothing: it sends data only to the model endpoint you
+  configure, the tool sources you declare, and `webfetch` targets the model chooses. See
+  [STABILITY.md](STABILITY.md).
+- **Minimum supported Rust version: 1.88** (declared as `rust-version` in the workspace
+  `Cargo.toml`). The floor comes from the dependency tree, not from a language feature we
+  use.
 - Two wire protocols are implemented natively: OpenAI Chat Completions and Anthropic
   Messages. Both normalize into the same `StreamEvent` sequence, so the agent loop and
   UI are protocol-agnostic.

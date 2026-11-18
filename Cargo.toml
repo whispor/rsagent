@@ -11,6 +11,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/whispor/rsagent"
+# Minimum Supported Rust Version. Bumping it is a minor-version change (see STABILITY.md).
+# 1.88 is the floor set by the dependency tree (icu_* via reqwest → url).
+rust-version = "1.88"
 
 [workspace.dependencies]
 rsagent-ai = { path = "crates/rsagent-ai" }

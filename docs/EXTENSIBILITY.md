@@ -364,8 +364,8 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 |
-| 稳定性承诺 | semver + 弃用周期 | 无 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
-| 遥测 | 默认关或显式选择加入 | 无遥测 | **MUST 声明**：README 写明"不收集任何遥测" |
+| 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
+| 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
 | 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
 | 子命令结构 | `tools` / `mcp` / `config` 分组 | 全平铺在顶层参数 | **SHOULD 分组**（§3.6） |
 
@@ -411,7 +411,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | --- | --- |
 | P3-1 | `rsagent tools list / doctor / add / remove`（§3.6） |
 | P3-2 | ✅ 会话文件原子写（§4.2 陷阱 3） |
-| P3-3 | `STABILITY.md` + MSRV 声明（§5） |
+| P3-3 | ✅ `STABILITY.md` + MSRV 声明（§5） |
 | P3-4 | 会话 JSONL 追加模式（§5） |
 
 **P1 是分水岭**：P0 只加检查与文档，P1 才真正引入新抽象。P1 的每一项都应单独提交，
@@ -462,5 +462,6 @@ Copy this into your PR description. · 复制到 PR 描述里。
 ## 9. 相关文档 · See also
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — 三层分层、一次运行的生命周期、两条通道、扩展点
+- [`../STABILITY.md`](../STABILITY.md) — 版本策略、公开 API 清单、MSRV、遥测声明
 - [`tool-call-journey.html`](tool-call-journey.html) — 一次工具调用的逐步可视化
 - `crates/rsagent-agent/tests/tool_conformance.rs` — 本规范 §2.4 的可执行部分
