@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Stateful agent with tool execution and event streaming, modelled after pi-agent-core"
+keywords = ["agent", "llm", "ai", "tools", "mcp"]
+categories = ["api-bindings", "asynchronous"]
+readme = "../../README.md"
 
 [dependencies]
 rsagent-ai.workspace = true

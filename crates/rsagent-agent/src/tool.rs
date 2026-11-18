@@ -153,6 +153,20 @@ impl ToolResult {
 /// encoding the failure in its content. The agent reports `Err` results to the model
 /// with `is_error: true`.
 ///
+/// # Why the error is a `String`
+///
+/// A tool's failure is ultimately *shown to the model* as text, so the message is the
+/// payload, not a detail alongside it. A structured error enum would have to be
+/// stringified for the model anyway, and every tool author would pay the cost of
+/// declaring and converting into it. The kinds that genuinely need to be told apart —
+/// "the source is unreachable" versus "the source answered with a business error" — are
+/// decided **structurally**, by the code path, and fed to the source's circuit breaker
+/// there (`sources/local.rs`, `sources/web.rs`, …), never by matching on the message.
+/// So the message is free-form on purpose; a caller that needs more can inspect the
+/// tool's own [`ToolResult::details`] on success, or the [`ToolExecutionEnd`] event.
+///
+/// [`ToolExecutionEnd`]: crate::AgentEvent::ToolExecutionEnd
+///
 /// # Examples
 ///
 /// A tool is a [`ToolSpec`] (what the model sees) plus an [`execute`](Tool::execute)

@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "A minimal Rust coding agent CLI"
+keywords = ["agent", "cli", "llm", "coding-assistant", "ai"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "../../README.md"
 
 [[bin]]
 name = "rsagent"

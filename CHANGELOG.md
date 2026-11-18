@@ -28,6 +28,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   `%APPDATA%\rsagent\` on Windows) and merged under the project file, completing the
   precedence chain promised in `docs/EXTENSIBILITY.md` §3.3:
   **CLI flags > environment > project config > user config > built-in defaults**.
+- **Publishable crate metadata** — each crate declares `keywords`, `categories`, and a
+  `readme`, and the intra-workspace path dependencies now carry a `version`, so the three
+  crates can be packaged and published to crates.io (in order: `rsagent-ai`,
+  `rsagent-agent`, `rsagent`).
 
 ### Changed
 - **HTTP providers reuse one `reqwest::Client`** (and therefore one connection pool) for

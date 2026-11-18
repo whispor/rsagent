@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Unified multi-provider LLM API with streaming events, modelled after pi-ai"
+keywords = ["llm", "openai", "anthropic", "streaming", "provider"]
+categories = ["api-bindings", "asynchronous"]
+readme = "../../README.md"
 
 [dependencies]
 serde.workspace = true
