@@ -729,6 +729,43 @@ fn no_color_output_has_no_escapes() {
 }
 
 #[test]
+fn a_session_write_is_atomic_and_leaves_no_temp_file() {
+    // The session is written to a sibling temp file and renamed into place, so a crash
+    // can never leave a half-written file behind, and no temp file survives a clean run.
+    let dir = temp_dir("session-atomic");
+    let session = dir.join("work.json");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let saved = std::fs::read_to_string(&session).expect("read session");
+    let value: serde_json::Value = serde_json::from_str(&saved).expect("the session is valid JSON");
+    assert_eq!(value["version"], serde_json::json!(1));
+
+    let leftovers: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read the working directory")
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the atomic write left temp files behind: {leftovers:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_versioned_session_is_resumed() {
     let dir = temp_dir("session-resume");
     let session = dir.join("work.json");

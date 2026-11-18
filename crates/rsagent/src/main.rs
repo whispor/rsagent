@@ -9,6 +9,7 @@
 mod config;
 mod input;
 mod render;
+mod session;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,10 +23,9 @@ use rsagent_agent::{
     PathFence, SkillSource, SourceEntry, SourceHealth, ToolCatalog, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
-    AnthropicProvider, Context, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
-    StreamOptions, ThinkingLevel,
+    AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
+    ThinkingLevel,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use config::{find_upward, Config, SourceConfig};
@@ -40,13 +40,6 @@ Prefer small, focused changes. Explain briefly what you did.";
 /// Project instruction file, read from the working directory upward. The name is the
 /// cross-tool convention (`AGENTS.md`), so the same file also serves other agents.
 const PROJECT_INSTRUCTIONS: &str = "AGENTS.md";
-
-/// Session files are wrapped in a versioned envelope, so a future format change is
-/// detected instead of silently misread.
-const SESSION_VERSION: u32 = 1;
-
-/// The session file resumed by `--continue`.
-const DEFAULT_SESSION_FILE: &str = ".rsagent-session.json";
 
 #[derive(Parser, Debug)]
 #[command(name = "rsagent", version, about = "A minimal Rust coding agent")]
@@ -188,14 +181,14 @@ async fn main() -> anyhow::Result<()> {
     agent.subscribe(tx);
 
     // `--session` names a file explicitly; `--continue` falls back to the default one.
-    let session_path = cli
-        .session
-        .clone()
-        .or_else(|| cli.continue_.then(|| PathBuf::from(DEFAULT_SESSION_FILE)));
+    let session_path = cli.session.clone().or_else(|| {
+        cli.continue_
+            .then(|| PathBuf::from(session::DEFAULT_SESSION_FILE))
+    });
 
     // Resume a persisted transcript, if one exists.
     if let Some(path) = &session_path {
-        match load_session(path) {
+        match session::load(path) {
             Ok(Some(context)) => {
                 let count = context.messages.len();
                 agent.load_messages(context.messages);
@@ -239,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
             ))]);
         }
         run_prompt(&mut agent, &mut rx, &mut renderer, prompt).await?;
-        save_session(session_path.as_deref(), &agent, palette);
+        session::save(session_path.as_deref(), &agent, palette);
         // A model-level failure (bad key, network error, provider refusal) ends the
         // run "successfully" as far as the loop is concerned. In one-shot `--print`
         // mode that must still be visible to scripts and CI, so exit non-zero; the
@@ -667,7 +660,7 @@ async fn run_repl(
                 "clear" => {
                     let dropped = agent.messages().len();
                     agent.load_messages(Vec::new());
-                    save_session(session_path, agent, renderer.palette);
+                    session::save(session_path, agent, renderer.palette);
                     println!(
                         "{}",
                         renderer
@@ -693,73 +686,10 @@ async fn run_repl(
         }
 
         run_prompt(agent, rx, renderer, input_text.to_string()).await?;
-        save_session(session_path, agent, renderer.palette);
+        session::save(session_path, agent, renderer.palette);
     }
 
     Ok(())
-}
-
-/// A session file: a versioned envelope around the persisted [`Context`].
-#[derive(Debug, Serialize, Deserialize)]
-struct SessionFile {
-    /// Format version, so a newer file can be recognized (and rejected) by an older build.
-    version: u32,
-    /// The persisted transcript and system prompt.
-    context: Context,
-}
-
-/// Read a persisted transcript, if the file exists.
-///
-/// Both the current versioned envelope and the older bare-`Context` format are
-/// accepted; a file written by a newer format version is rejected rather than misread.
-fn load_session(path: &Path) -> anyhow::Result<Option<Context>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = std::fs::read_to_string(path)?;
-    let value: Value = serde_json::from_str(&text)?;
-    if value.get("version").is_some() {
-        let file: SessionFile = serde_json::from_value(value)?;
-        if file.version > SESSION_VERSION {
-            anyhow::bail!(
-                "written by a newer rsagent (format v{}); this build understands up to v{}",
-                file.version,
-                SESSION_VERSION
-            );
-        }
-        Ok(Some(file.context))
-    } else {
-        // Legacy format: a bare `Context` with no envelope.
-        Ok(Some(serde_json::from_value(value)?))
-    }
-}
-
-/// Write the transcript to `path`, if a session file was requested.
-fn save_session(path: Option<&Path>, agent: &Agent, palette: Palette) {
-    let Some(path) = path else {
-        return;
-    };
-    let file = SessionFile {
-        version: SESSION_VERSION,
-        context: agent.transcript(),
-    };
-    match serde_json::to_string_pretty(&file) {
-        Ok(json) => {
-            if let Err(err) = std::fs::write(path, json) {
-                eprintln!(
-                    "{}",
-                    palette.yellow(&format!(
-                        "· could not save session to {}: {err}",
-                        path.display()
-                    ))
-                );
-            }
-        }
-        Err(err) => eprintln!(
-            "{}",
-            palette.yellow(&format!("· could not serialize session: {err}"))
-        ),
-    }
 }
 
 /// Drive one prompt while concurrently rendering the agent's events.
