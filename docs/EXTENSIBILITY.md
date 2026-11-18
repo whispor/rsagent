@@ -43,7 +43,7 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` 仍是唯一入口；`ToolCatalog` 在装配期把来源展开成该扁平列表 | — |
 | 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` / `LocalSource` / `McpStdioSource` / `McpHttpSource` / `SkillSource` / `WebSource`（`sources/`）六种实现 | — |
 | 提供商 | `Provider` trait + `Models::register`（`rsagent-ai/src/provider.rs`） | — |
-| 审批 | ✅ `Approver` trait + `Agent::with_approver`；CLI `CliApprover`（`--yes` / 交互 `y`·`a`·回车 / 非交互默认拒绝） | 决策语义已文档化（README「审批」节 + `approval.rs`）；工具按布尔 `requires_approval` 标注，尚未按类别分级 |
+| 审批 | ✅ `Approver` trait + `Agent::with_approver`；CLI `CliApprover`（`--yes` / `--allow <类别>` / 交互 `y`·`a`·回车 / 非交互默认拒绝） | 决策语义已文档化（README「审批」节 + `approval.rs`）；工具按 `Permission`（`read`/`write`/`exec`/`network`）分级，`--allow` 可按类别自动放行 |
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
 | 平台差异 | ✅ 收敛到 `platform.rs`（工作区唯一 `#[cfg]`） | — |
 | CI | ✅ 三平台矩阵（ubuntu / windows / macos） | — |
@@ -112,6 +112,8 @@ These hold for every change, forever. · 以下每条对所有改动永久有效
 3. **工具失败 MUST 用 `Err(String)`，MUST NOT 把失败塞进成功结果的 `content`。**
    循环据此把结果标成 `is_error: true` 交回模型。
 4. **`Tool::requires_approval()` MUST 与实际副作用一致。** 会写盘、跑命令、发网络请求的工具必须返回 `true`。
+   需要审批的工具 SHOULD 同时用 `Tool::permission()` 声明真实类别（`read`/`write`/`exec`/`network`），
+   否则默认按最严的 `exec` 处理——**MUST NOT 声明成比实际副作用更宽松的类别**（那会让 `--allow` 静默放行危险操作）。
 5. **工具名 MUST 全局唯一且为 `snake_case`。** 模型靠名字调用，重名即歧义。
 6. **工具的参数 schema MUST 是 JSON object schema**，且 `required` 里的键 MUST 在 `properties` 中声明。
 7. **公开 API MUST 有文档注释**；返回 `Result` 的 MUST 有 `# Errors` 段（`missing_errors_doc` 已开）。
@@ -403,7 +405,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
 | 配置优先级 | CLI > env > project > user | ✅ 四档已实现并文档化：用户级 + 项目级 `rsagent.toml` 分层合并（`config::load_layered`，README） | **MUST 文档化**（§3.3） |
 | 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout；`--log <FILE>` 在任意模式下追加同形 JSONL 追踪 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
-| 权限模型 | 按工具类别分级 + 白/黑名单 | ✅ 已文档化：`Approver` 决策语义（README「审批」节，`y`/`a`/回车 三种答复）+ `PathFence` 工作目录围栏；工具按布尔 `requires_approval` 标注 | **SHOULD 扩展**：细粒度到 `read` / `write` / `exec` / `network` 类别分级（当前为逐工具布尔） |
+| 权限模型 | 按工具类别分级 + 白/黑名单 | ✅ 已文档化：`Approver` 决策语义（README「审批」节，`y`/`a`/回车 三种答复）+ `PathFence` 工作目录围栏；工具声明 `Permission` 类别（`read`/`write`/`exec`/`network`），CLI `--allow <类别>` 按类别放行 | **SHOULD 扩展**：细粒度到 `read` / `write` / `exec` / `network` 类别分级 ✅（白/黑名单式的逐类别禁用为 MAY） |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封；`.jsonl` 后缀启用 JSONL 追加模式 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 ✅ |
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.95，CI 有独立任务在 1.95 上构建校验 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
@@ -481,6 +483,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D12 | 熔断器状态用**墙钟秒**的 `BreakerReport` 持久化，而非直接存 `Instant` | `Instant` 是单调时钟，跨进程无意义：新进程读到的 `Instant` 无法与"现在"比较，还原出的冷却剩余时间必然错误。改用 `opened_at_unix`（Unix 秒）+ `cooldown_secs`，`restore()` 在启动时用当前墙钟反推，于是"上个进程里冷却中的来源"能被正确地继续排除 |
 | D13 | 健康探针是**不透明闭包**（`HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource>>`），而非让 `Agent` 持有 `ToolSource` | 一旦循环持有来源，它就要理解"连接失败/超时/熔断"等来源专有状态，D2 的隔离随之瓦解。闭包把来源健康降维成纯数据（id/kind/reason），循环只负责"对比上一轮、发一次事件"。CLI 侧用 `Arc<[SourceEntry]>` 同时供探针轮询与运行后的快照，避免复制来源 |
 | D14 | 工具失败用 **`Err(String)`**，不引入结构化错误类型 | 工具失败最终是**给模型看的文本**，消息本身就是载荷；结构化枚举最后还是得字符串化给模型，却让每个工具作者都背一次声明与转换的成本。真正需要区分的类别（"来源不可达" vs "来源回了业务错误"）是**按代码路径结构化判定**的（`sources/local.rs` / `web.rs` 等直接喂熔断器），从不匹配消息文本——所以消息自由格式是有意的。需要更多信息的调用方，可读成功时的 `ToolResult::details` 或 `ToolExecutionEnd` 事件 |
+| D15 | 权限分级用**新增 `Tool::permission()` 类别**，而**保留 `requires_approval()` 布尔作为门禁**；`Approver` 的两个方法都接收 `Permission` | 门禁（"要不要审批"）与类别（"属于哪类副作用"）是两个正交问题：read 工具无需审批，但只要审批就必须知道是哪一类才能分级。把两者合成一个枚举会破坏"布尔门禁"的既有语义、波及配置字段与不变量 #4。类别由**循环在查表时顺带取得**并**传参**给 `Approver`（而非让 `CliApprover` 自建 name→类别 的旁表），保证"来源唯一"（呼应 M 的原则）。默认类别取最严的 `exec`：未分类的审批工具不会被 `--allow write`/`--allow network` 意外放行 |
 
 ---
 

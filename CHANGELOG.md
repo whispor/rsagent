@@ -38,8 +38,17 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   alternatives, instead of letting the first prompt come back as a terse model error. A
   custom `--base-url` (a local endpoint may need no key) only warns; `--json` keeps its
   machine contract and lets the failure surface as an error event.
+- **`--allow <CATEGORY>[,...]`** — auto-approve only some kinds of side effects instead
+  of everything. Tools now declare a `Permission` category (`read`, `write`, `exec`,
+  `network`), and a listed category runs without a prompt while the rest still ask. For
+  example, `--allow network` lets `webfetch` run unattended but still confirms writes and
+  shell commands. The category is shown per tool by `rsagent tools list`.
 
 ### Changed
+- **Breaking: `Approver::approve` / `needs_prompt` now take the tool's `Permission`.**
+  The category (`read` / `write` / `exec` / `network`) is passed alongside the name so a
+  policy can vary by kind — the mechanism behind `--allow`. A custom `Approver` adds the
+  parameter; `AllowAll` and `DenyAll` are unchanged in behaviour.
 - **HTTP providers reuse one `reqwest::Client`** (and therefore one connection pool) for
   the whole provider lifetime, instead of building a fresh client per request. This
   removes repeated TCP/TLS setup on multi-turn runs. The client is created with no

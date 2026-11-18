@@ -152,14 +152,18 @@ contract and the execution logic can evolve independently.
 
 Before a batch of calls runs, each one is **preflighted**: the agent asks the
 [`Approver`](../crates/rsagent-agent/src/approval.rs) whether it may run. Tools that
-mutate the filesystem or run commands return `requires_approval() == true`. Calls in a
-batch run in parallel **unless** any tool in the batch declares `is_sequential()`
-(then the whole batch runs in order).
+mutate the filesystem or run commands return `requires_approval() == true`, and they also
+declare a [`Permission`](../crates/rsagent-agent/src/approval.rs) category (`read`,
+`write`, `exec`, `network`) so the policy can be finer than all-or-nothing — this is what
+the CLI's `--allow <category>` builds on. Calls in a batch run in parallel **unless** any
+tool in the batch declares `is_sequential()` (then the whole batch runs in order).
 
 一批调用执行前会逐个**预检**：智能体询问
 [`Approver`](../crates/rsagent-agent/src/approval.rs) 是否放行。会改动文件系统或执行
-命令的工具返回 `requires_approval() == true`。一批内的调用默认**并行**执行，**除非**
-其中任一工具声明了 `is_sequential()`（此时整批按顺序执行）。
+命令的工具返回 `requires_approval() == true`，并额外声明
+[`Permission`](../crates/rsagent-agent/src/approval.rs) 类别（`read` / `write` / `exec` /
+`network`），使策略能细于"全有或全无"——CLI 的 `--allow <类别>` 即建立在此之上。一批内的
+调用默认**并行**执行，**除非**其中任一工具声明了 `is_sequential()`（此时整批按顺序执行）。
 
 ---
 
@@ -278,8 +282,8 @@ If you are learning the codebase, read in this order — it follows the data flo
     state across runs, `log.rs` appends the event stream to `--log`, and `session.rs` +
     `fs.rs` persist and atomically write sessions.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 205 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 213 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 205 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 213 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。

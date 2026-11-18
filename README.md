@@ -388,6 +388,7 @@ source out of the tool list (see decision D9).
 | `--max-tokens <N>` | | Maximum tokens to generate per response (provider default when unset). |
 | `--thinking <LEVEL>` | | Extended-reasoning budget: `off` (default), `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `-y, --yes` | | Auto-approve every tool call. |
+| `--allow <CATEGORY>[,...]` | | Auto-approve these categories without prompting: `read`, `write`, `exec`, `network`. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
 | `--continue` | | Resume the default session file (`.rsagent-session.json`). |
 | `--no-color` | `NO_COLOR` | Disable ANSI colors. |
@@ -412,16 +413,16 @@ Run `rsagent tools add --help` for the per-kind fields (`--url`, `--command`, `-
 
 ## Built-in tools
 
-| Tool | Approval | Description |
-| --- | --- | --- |
-| `read_file` | no | Read a file as UTF-8 text, each line prefixed with its line number; `offset`/`limit` read a range. |
-| `list_dir` | no | List directory entries. |
-| `search` | no | Search files under a directory for a literal substring (`path:line: text`). |
-| `glob` | no | Find files by glob pattern (`*`, `?`, `**`), one path per line. |
-| `webfetch` | yes | Fetch an HTTP(S) URL and return it as text (HTML is converted). |
-| `write_file` | yes | Write a file, creating parent directories. |
-| `edit_file` | yes | Replace an exact string in a file. |
-| `bash` | yes | Run a shell command (killed after a timeout). |
+| Tool | Approval | Category | Description |
+| --- | --- | --- | --- |
+| `read_file` | no | `read` | Read a file as UTF-8 text, each line prefixed with its line number; `offset`/`limit` read a range. |
+| `list_dir` | no | `read` | List directory entries. |
+| `search` | no | `read` | Search files under a directory for a literal substring (`path:line: text`). |
+| `glob` | no | `read` | Find files by glob pattern (`*`, `?`, `**`), one path per line. |
+| `webfetch` | yes | `network` | Fetch an HTTP(S) URL and return it as text (HTML is converted). |
+| `write_file` | yes | `write` | Write a file, creating parent directories. |
+| `edit_file` | yes | `write` | Replace an exact string in a file. |
+| `bash` | yes | `exec` | Run a shell command (killed after a timeout). |
 
 `search` and `glob` do not descend into build-output or vendor directories (`target`,
 `node_modules`, `.git`, `.venv`, `venv`, `__pycache__`), so matches are not buried
@@ -465,10 +466,20 @@ Three answers are accepted:
 | `a` + Enter | Allow this call and stop asking for the rest of the session. |
 | Enter (or `n`) | Deny; the model is told and usually tries another approach. |
 
-To skip the prompts from the start, launch with `--yes`. With `--print`, mutating
-tools are denied unless `--yes` is passed, so scripts never mutate state by surprise.
-Long-running `bash` output streams to the terminal line by line, and the command is
-killed after 120s.
+To skip the prompts from the start, launch with `--yes` (allow every call). To trust
+only some kinds of side effects, use `--allow <CATEGORY>[,...]`: the categories are
+`read`, `write`, `exec`, and `network`, and a listed category is auto-approved without a
+prompt. For example, `--allow network` lets `webfetch` run unattended while writes and
+shell commands still ask:
+
+```bash
+rsagent --allow network,write "fetch the changelog and save it to notes.md"
+```
+
+Each tool's category is shown by `rsagent tools list`. With `--print`, mutating tools
+are denied unless `--yes` (or a matching `--allow`) is passed, so scripts never mutate
+state by surprise. Long-running `bash` output streams to the terminal line by line, and
+the command is killed after 120s.
 
 ## Sessions
 
