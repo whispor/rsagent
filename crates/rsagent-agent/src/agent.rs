@@ -1,7 +1,8 @@
 //! The stateful agent: a turn loop that calls a model, executes tools, and emits events.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use futures::future::join_all;
 use futures::StreamExt;
@@ -16,7 +17,16 @@ use crate::approval::Approver;
 use crate::cancel::CancelToken;
 use crate::error::AgentError;
 use crate::event::AgentEvent;
+use crate::source::UnhealthySource;
 use crate::tool::{PathFence, Tool, ToolContext};
+
+/// A health probe: returns the sources that are unhealthy right now.
+///
+/// The loop calls it once per turn and emits [`AgentEvent::SourceUnhealthy`] for each
+/// source that has *newly* turned unhealthy. It is an opaque closure on purpose: it is
+/// how a caller reports source health without the loop learning that sources exist
+/// (decision D2, `docs/EXTENSIBILITY.md` §3.1).
+pub type HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource> + Send + Sync>;
 
 /// A coding agent driven by an event loop.
 ///
@@ -81,6 +91,9 @@ pub struct Agent {
     is_streaming: bool,
     last_error: Option<String>,
     pending_tool_calls: Vec<String>,
+    health_probe: Option<HealthProbe>,
+    /// Source ids already reported unhealthy, so a transition is announced once.
+    reported_unhealthy: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -103,6 +116,8 @@ impl std::fmt::Debug for Agent {
             .field("cancel", &self.cancel.is_cancelled())
             .field("last_error", &self.last_error)
             .field("pending_tool_calls", &self.pending_tool_calls.len())
+            .field("health_probe", &self.health_probe.is_some())
+            .field("reported_unhealthy", &self.reported_unhealthy.len())
             .finish()
     }
 }
@@ -130,6 +145,8 @@ impl Agent {
             is_streaming: false,
             last_error: None,
             pending_tool_calls: Vec::new(),
+            health_probe: None,
+            reported_unhealthy: BTreeSet::new(),
         }
     }
 
@@ -181,6 +198,17 @@ impl Agent {
     #[must_use]
     pub fn with_max_turns(mut self, max_turns: usize) -> Self {
         self.max_turns = max_turns;
+        self
+    }
+
+    /// Install a health probe, polled once per turn.
+    ///
+    /// Each source the probe reports as newly unhealthy produces one
+    /// [`AgentEvent::SourceUnhealthy`]; a source that recovers may report again on its
+    /// next trip. Without a probe the loop emits no such events.
+    #[must_use]
+    pub fn with_health_probe(mut self, probe: HealthProbe) -> Self {
+        self.health_probe = Some(probe);
         self
     }
 
@@ -328,6 +356,7 @@ impl Agent {
             }
             self.inject_steering();
             self.compact_context();
+            self.probe_health();
 
             self.emit(&AgentEvent::TurnStart);
 
@@ -697,6 +726,29 @@ impl Agent {
             dropped_messages: dropped,
         });
         dropped
+    }
+
+    /// Poll the health probe and announce each source that has newly turned unhealthy.
+    ///
+    /// A source is announced once per trip: it is added to the reported set while
+    /// unhealthy and removed when it recovers, so a later failure reports again. With no
+    /// probe installed this is a no-op.
+    fn probe_health(&mut self) {
+        let Some(probe) = self.health_probe.clone() else {
+            return;
+        };
+        let mut now_unhealthy = BTreeSet::new();
+        for source in probe() {
+            now_unhealthy.insert(source.id.clone());
+            if self.reported_unhealthy.insert(source.id.clone()) {
+                self.emit(&AgentEvent::SourceUnhealthy {
+                    source_id: source.id,
+                    kind: source.kind,
+                    reason: source.reason,
+                });
+            }
+        }
+        self.reported_unhealthy = now_unhealthy;
     }
 
     /// The token budget for one request: three quarters of the model's context window,

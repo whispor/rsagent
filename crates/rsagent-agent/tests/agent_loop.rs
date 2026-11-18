@@ -1,8 +1,11 @@
 //! End-to-end tests for the agent loop, driven by the offline `FauxProvider`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use rsagent_agent::{builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence};
+use rsagent_agent::{
+    builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence, UnhealthySource,
+};
 use rsagent_ai::{FauxProvider, FauxResponse, Message, Models};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -106,6 +109,37 @@ async fn unknown_tools_are_reported_as_errors() {
         _ => None,
     });
     assert_eq!(failed.as_deref(), Some("does_not_exist"));
+}
+
+#[tokio::test]
+async fn a_newly_unhealthy_source_is_reported_once() {
+    // A tool call then a text answer is two turns; a source that stays unhealthy across
+    // both must be announced exactly once, not once per turn (§3.5).
+    let (agent, _faux, mut events) = harness(vec![
+        FauxResponse::tool_calls(vec![("does_not_exist", json!({}))]),
+        FauxResponse::text("done"),
+    ]);
+    let mut agent = agent.with_health_probe(Arc::new(|| {
+        vec![UnhealthySource {
+            id: "local-x".to_string(),
+            kind: "local".to_string(),
+            reason: "circuit open".to_string(),
+        }]
+    }));
+
+    agent.prompt("go").await.expect("prompt completes");
+
+    let mut reported = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let AgentEvent::SourceUnhealthy { source_id, .. } = event {
+            reported.push(source_id);
+        }
+    }
+    assert_eq!(
+        reported,
+        vec!["local-x".to_string()],
+        "an unhealthy source is announced once per trip"
+    );
 }
 
 #[tokio::test]

@@ -18,14 +18,14 @@ pub mod sources;
 pub mod tool;
 pub mod tools;
 
-pub use agent::Agent;
+pub use agent::{Agent, HealthProbe};
 pub use approval::{AllowAll, Approver, DenyAll};
-pub use breaker::{BreakerPolicy, BreakerState, CircuitBreaker};
+pub use breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 pub use cancel::CancelToken;
 pub use catalog::{CatalogError, SourceEntry, ToolCatalog, PREFIX_SEPARATOR};
 pub use error::AgentError;
 pub use event::AgentEvent;
-pub use source::{SourceHealth, SourceKind, ToolSource};
+pub use source::{SourceHealth, SourceKind, ToolSource, UnhealthySource};
 pub use sources::{
     BuiltinSource, LocalSource, McpHttpSource, McpStdioSource, SkillSource, WebSource,
     WebSourceConfig, BUILTIN_SOURCE_ID, MCP_PROTOCOL_VERSION, PROTOCOL_VERSION,

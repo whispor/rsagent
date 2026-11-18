@@ -12,10 +12,13 @@
 //! whole state machine is tested deterministically without sleeping.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 /// What a breaker is currently doing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum BreakerState {
     /// Normal: calls pass through.
     Closed,
@@ -23,6 +26,25 @@ pub enum BreakerState {
     Open,
     /// Cooldown elapsed: exactly one probe call is allowed to test the source.
     HalfOpen,
+}
+
+/// A serializable snapshot of a breaker, for persistence and status display.
+///
+/// The live breaker measures time with [`Instant`] (monotonic, but meaningless across
+/// processes). A report therefore records wall-clock seconds, so the CLI can persist it
+/// and rebuild the breaker in a later run (`rsagent tools list` / `doctor` / `reset`,
+/// `docs/EXTENSIBILITY.md` §3.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakerReport {
+    /// The effective state at snapshot time.
+    pub state: BreakerState,
+    /// Consecutive connection-class failures recorded while closed.
+    pub failures: u32,
+    /// Unix seconds when the breaker last opened, if it ever did.
+    pub opened_at_unix: Option<u64>,
+    /// The cooldown in force at snapshot time, in seconds.
+    pub cooldown_secs: u64,
 }
 
 /// When to trip, and how long to stay tripped.
@@ -172,6 +194,50 @@ impl CircuitBreaker {
         self.record_success();
     }
 
+    /// Snapshot the breaker as a serializable [`BreakerReport`].
+    ///
+    /// Reading never consumes a half-open probe, so this is safe to call from a status
+    /// display or a persistence step.
+    pub fn report(&self) -> BreakerReport {
+        let now = Instant::now();
+        let inner = self.lock();
+        BreakerReport {
+            state: effective(&inner, now),
+            failures: inner.failures,
+            opened_at_unix: inner
+                .opened_at
+                .map(|at| unix_now().saturating_sub(now.saturating_duration_since(at).as_secs())),
+            cooldown_secs: inner.cooldown.as_secs(),
+        }
+    }
+
+    /// Rebuild the breaker from a persisted [`BreakerReport`].
+    ///
+    /// The cooldown is measured from the report's wall-clock timestamp, so a breaker that
+    /// was open when the process exited is still open (or, once its cooldown has passed,
+    /// half-open) in the next run. A report that no longer fits the current uptime simply
+    /// re-arms a full cooldown rather than panicking.
+    pub fn restore(&self, report: &BreakerReport) {
+        let now = Instant::now();
+        let mut inner = self.lock();
+        inner.failures = report.failures;
+        inner.cooldown = Duration::from_secs(report.cooldown_secs);
+        match report.state {
+            BreakerState::Closed => {
+                inner.state = BreakerState::Closed;
+                inner.opened_at = None;
+            }
+            // Both open and half-open restore as "open at the recorded time"; `effective`
+            // then decides whether the cooldown has already elapsed (half-open) or not.
+            BreakerState::Open | BreakerState::HalfOpen => {
+                let opened_at_unix = report.opened_at_unix.unwrap_or_else(unix_now);
+                let elapsed = unix_now().saturating_sub(opened_at_unix);
+                inner.opened_at = now.checked_sub(Duration::from_secs(elapsed));
+                inner.state = BreakerState::Open;
+            }
+        }
+    }
+
     /// Lock the mutex, treating poisoning as "the state is still usable".
     ///
     /// A panic elsewhere must not make a breaker permanently unusable; the worst case of a
@@ -200,9 +266,16 @@ fn effective(inner: &Inner, now: Instant) -> BreakerState {
     }
 }
 
+/// Wall-clock seconds since the Unix epoch, for persisted reports.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BreakerPolicy, BreakerState, CircuitBreaker};
+    use super::{unix_now, BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
     use std::time::{Duration, Instant};
 
     /// A fast policy, so tests read in milliseconds rather than minutes.
@@ -325,5 +398,74 @@ mod tests {
         assert_eq!(breaker.state(now), BreakerState::Closed);
         assert!(breaker.allows(now));
         assert_eq!(breaker.retry_after(now), None);
+    }
+
+    #[test]
+    fn a_closed_breaker_reports_closed_with_no_open_time() {
+        let breaker = CircuitBreaker::new(policy());
+        let report = breaker.report();
+        assert_eq!(report.state, BreakerState::Closed);
+        assert_eq!(report.failures, 0);
+        assert_eq!(report.opened_at_unix, None);
+        assert_eq!(report.cooldown_secs, 60);
+    }
+
+    #[test]
+    fn a_tripped_breaker_survives_a_report_round_trip() {
+        // Persisting and rebuilding a breaker in a later process must not lose the trip:
+        // the source stays refused instead of being hammered again from a fresh start.
+        let breaker = CircuitBreaker::new(policy());
+        let now = Instant::now();
+        for _ in 0..3 {
+            breaker.record_failure(now);
+        }
+        let report = breaker.report();
+        assert_eq!(report.state, BreakerState::Open);
+        assert!(report.opened_at_unix.is_some());
+
+        let restored = CircuitBreaker::new(policy());
+        restored.restore(&report);
+        assert_eq!(restored.state(Instant::now()), BreakerState::Open);
+        assert!(!restored.allows(Instant::now()));
+    }
+
+    #[test]
+    fn an_expired_report_restores_half_open() {
+        // A cooldown that elapsed while the process was down must restore as half-open,
+        // so the next run gets to probe the source exactly once.
+        let breaker = CircuitBreaker::new(policy());
+        let report = BreakerReport {
+            state: BreakerState::Open,
+            failures: 3,
+            // Opened an hour ago; the 60s cooldown is long over.
+            opened_at_unix: Some(unix_now().saturating_sub(3600)),
+            cooldown_secs: 60,
+        };
+        breaker.restore(&report);
+
+        let now = Instant::now();
+        assert_eq!(breaker.state(now), BreakerState::HalfOpen);
+        assert!(breaker.allows(now), "the probe is granted");
+        assert!(!breaker.allows(now), "only one probe");
+    }
+
+    #[test]
+    fn restoring_a_closed_report_clears_a_live_trip() {
+        // The manual reset path: a persisted `closed` report overwrites a live trip.
+        let breaker = CircuitBreaker::new(policy());
+        let now = Instant::now();
+        for _ in 0..3 {
+            breaker.record_failure(now);
+        }
+        assert!(!breaker.allows(now));
+
+        breaker.restore(&BreakerReport {
+            state: BreakerState::Closed,
+            failures: 0,
+            opened_at_unix: None,
+            cooldown_secs: 60,
+        });
+        assert_eq!(breaker.state(Instant::now()), BreakerState::Closed);
+        assert!(breaker.allows(Instant::now()));
     }
 }

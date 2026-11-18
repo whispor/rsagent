@@ -166,6 +166,15 @@ impl ToolCatalog {
         self.tools
     }
 
+    /// Consume the catalog, yielding the tools *and* the sources behind them.
+    ///
+    /// A tool shares its source's circuit breaker, so a caller that keeps the sources can
+    /// snapshot breaker state after a run even though the tools now belong to the agent
+    /// (`docs/EXTENSIBILITY.md` §3.5).
+    pub fn into_parts(self) -> (Vec<Box<dyn Tool>>, Vec<SourceEntry>) {
+        (self.tools, self.entries)
+    }
+
     /// Every source's health, paired with its id.
     pub fn health(&self) -> Vec<(String, SourceHealth)> {
         self.entries

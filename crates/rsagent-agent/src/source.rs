@@ -5,6 +5,7 @@
 //! by [`ToolCatalog`](crate::ToolCatalog) into a flat `Vec<Box<dyn Tool>>`; the agent loop
 //! never learns that sources exist (decision D2, `docs/EXTENSIBILITY.md` §3.1).
 
+use crate::breaker::BreakerReport;
 use crate::tool::Tool;
 
 /// What kind of source a [`ToolSource`] is.
@@ -56,6 +57,23 @@ pub enum SourceHealth {
     Unhealthy(String),
 }
 
+/// A source that a health probe currently considers unhealthy.
+///
+/// The CLI builds these from its live sources and hands them to the agent's health probe
+/// ([`Agent::with_health_probe`](crate::Agent::with_health_probe)); the loop turns each
+/// *newly* unhealthy one into an [`AgentEvent::SourceUnhealthy`](crate::AgentEvent). The
+/// loop itself never touches a [`ToolSource`], so it stays ignorant of where tools come
+/// from (decision D2, `docs/EXTENSIBILITY.md` §3.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnhealthySource {
+    /// The source's stable id.
+    pub id: String,
+    /// The source's kind, as its short config name (`local`, `mcp-http`, ...).
+    pub kind: String,
+    /// Why the source is unhealthy.
+    pub reason: String,
+}
+
 /// A group of tools, plus how to keep it healthy.
 ///
 /// Implementations must be cheap to call: [`tools`](ToolSource::tools) is invoked during
@@ -75,6 +93,20 @@ pub trait ToolSource: Send + Sync {
     fn health(&self) -> SourceHealth {
         SourceHealth::Healthy
     }
+
+    /// The source's circuit-breaker state, if it has one.
+    ///
+    /// Sources that cannot fail to load (e.g. `builtin`) have no breaker and return
+    /// `None`. The CLI persists these reports so `rsagent tools list` / `doctor` can show
+    /// them and `rsagent tools reset` can clear them (`docs/EXTENSIBILITY.md` §3.5).
+    fn breaker_report(&self) -> Option<BreakerReport> {
+        None
+    }
+
+    /// Rebuild this source's circuit breaker from a persisted report.
+    ///
+    /// Default: nothing to do. Called once at startup, before the first call.
+    fn restore_breaker(&self, _report: &BreakerReport) {}
 
     /// Do whatever this source needs before use (e.g. check that a program exists).
     ///

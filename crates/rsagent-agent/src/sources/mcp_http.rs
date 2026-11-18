@@ -33,7 +33,7 @@ use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use crate::breaker::{BreakerPolicy, BreakerState, CircuitBreaker};
+use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
@@ -425,6 +425,14 @@ impl ToolSource for McpHttpSource {
 
     fn health(&self) -> SourceHealth {
         self.health()
+    }
+
+    fn breaker_report(&self) -> Option<BreakerReport> {
+        Some(self.breaker.report())
+    }
+
+    fn restore_breaker(&self, report: &BreakerReport) {
+        self.breaker.restore(report);
     }
 }
 

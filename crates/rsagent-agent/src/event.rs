@@ -99,6 +99,17 @@ pub enum AgentEvent {
         /// How many messages were dropped.
         dropped_messages: usize,
     },
+    /// A tool source newly turned unhealthy — its circuit breaker tripped, say. Emitted
+    /// once per source on the transition into unhealthy, not on every turn, so a UI can
+    /// surface it without repeating itself (`docs/EXTENSIBILITY.md` §3.5).
+    SourceUnhealthy {
+        /// The id of the affected source.
+        source_id: String,
+        /// The source's kind, as a short string (`local`, `mcp-http`, ...).
+        kind: String,
+        /// Why it is unhealthy.
+        reason: String,
+    },
     /// The final event of a run.
     AgentEnd {
         /// The full transcript at the end of the run.
