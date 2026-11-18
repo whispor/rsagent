@@ -35,7 +35,7 @@ fails the build. · 一个 crate 的公开 API 就是其根
 | Surface | Where | Stability |
 | --- | --- | --- |
 | `rsagent-ai` types (`Message`, `ContentBlock`, `Context`, `ToolSpec`, `StreamEvent`, `Model`, `Models`, `Provider`, `StreamOptions`, `Usage`, `StopReason`, `ThinkingLevel`, `ErrorReason`) | crate root | Semver |
-| `rsagent-agent` types (`Agent`, `AgentError`, `Tool`, `ToolSource`, `ToolCatalog`, `SourceEntry`, `Approver`, `Permission`, `AgentEvent`, `PathFence`, `ToolResult`, `ToolContext`, `CircuitBreaker`) | crate root | Semver |
+| `rsagent-agent` types (`Agent`, `AgentError`, `Tool`, `ToolSource`, `ToolCatalog`, `SourceEntry`, `Approver`, `Permission`, `AgentEvent`, `PathFence`, `ToolResult`, `ToolContext`, `CircuitBreaker`, `Memory`, `MemoryEntry`, `RememberTool`, `RecallTool`) | crate root | Semver |
 | CLI flags and exit codes | `rsagent --help` | Semver |
 | `rsagent.toml` schema | [README](../README.md#tool-sources-rsagenttoml) | Semver |
 | `--json` event schema | [README](../README.md#json-output) | Semver (additive only) |

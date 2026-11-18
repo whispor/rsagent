@@ -391,6 +391,7 @@ source out of the tool list (see decision D9).
 | `--allow <CATEGORY>[,...]` | | Auto-approve these categories without prompting: `read`, `write`, `exec`, `network`. |
 | `--session <FILE>` | | Persist the conversation to a JSON file, resuming it if it exists. |
 | `--continue` | | Resume the default session file (`.rsagent-session.json`). |
+| `--memory <FILE>` | | Enable the `remember`/`recall` tools backed by an append-only JSONL note file, and fold recent notes into the system prompt. |
 | `--no-color` | `NO_COLOR` | Disable ANSI colors. |
 | `--allow-outside-cwd` | | Let read tools access paths outside the working directory. |
 | `--tools <LIST>` | | Enable only the named tools (comma-separated); default is all built-ins. |
@@ -437,6 +438,9 @@ mistaken path is visible before you approve it.
 The tool set can be narrowed with `--tools <LIST>` (only the named tools are enabled)
 and `--no-bash` (drops `bash` even if `--tools` listed it). An unknown name in `--tools`
 is reported on stderr rather than silently ignored.
+
+Two further tools, `remember` and `recall`, are offered only when `--memory <FILE>` is
+set — they are not part of the default built-in set. See [Memory](#memory).
 
 `webfetch` requires approval: it is the only tool that contacts an arbitrary external
 host, so the prompt shows the exact URL. It follows redirects, times out after 30s, and
@@ -511,6 +515,32 @@ rsagent --session work.jsonl --print "now summarize it"  # appends 2 more lines
 
 All session writes are atomic (a temp file plus a rename), so a crash or a concurrent
 run never leaves half a document behind.
+
+## Memory
+
+A session ends when the process does, and compaction throws turns away for good. Pass
+`--memory <FILE>` to give the agent a small, durable memory that outlives both: an
+append-only JSON Lines log of timestamped notes.
+
+```bash
+rsagent --memory notes.jsonl "remember that the release branch is release/2.0"
+rsagent --memory notes.jsonl "what is the release branch?"   # the note is already in context
+```
+
+With `--memory` set, two tools become available:
+
+| Tool | Category | Description |
+| --- | --- | --- |
+| `remember` | `write` | Append a timestamped note to the memory file. |
+| `recall` | `read` | Return the most recent notes (up to `limit`). |
+
+The newest notes are also folded into the system prompt on every request, so the model
+sees them without having to call `recall`; the store keeps the most recent 200 notes and
+drops older ones. When the transcript is compacted, the dropped turns are distilled into
+a single `[compacted]` note — what context management discards still survives on disk.
+
+Memory is a plain file you own: read, edit, or delete it with any tool. A truncated last
+line (from a crash mid-append) is dropped on load, exactly like an append-mode session.
 
 ## Exit codes
 
@@ -613,7 +643,8 @@ output and log files stay clean.
   model's context window (roughly three quarters of it is used, leaving room for the
   response). The first and most recent turns are always kept, so a tool call is never
   separated from its result; a `ContextCompacted` event reports how many messages were
-  dropped.
+  dropped. With `--memory`, the dropped turns are also distilled into a memory note, so
+  nothing the trim removes is lost entirely.
 - The `bash` tool is not sandboxed; approval prompts are the only guardrail.
 - **Same-process (WASM) plugin sandboxing is a non-goal.** Third-party code runs the same
   way the built-ins do — as a subprocess (`local`, `skill`, MCP) or an HTTP call (`web`) —

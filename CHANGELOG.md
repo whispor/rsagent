@@ -43,6 +43,13 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   `network`), and a listed category runs without a prompt while the rest still ask. For
   example, `--allow network` lets `webfetch` run unattended but still confirms writes and
   shell commands. The category is shown per tool by `rsagent tools list`.
+- **`--memory <FILE>`** — a durable, append-only memory of timestamped notes (JSONL) that
+  outlives a session. When set, two tools (`remember`, `recall`) join the tool set and the
+  newest notes are folded into the system prompt on every request; context compaction also
+  distills the turns it drops into a `[compacted]` note, so nothing the trim removes is lost
+  for good. The store keeps the most recent 200 notes. New public API: `Memory`,
+  `MemoryEntry`, `RememberTool`, `RecallTool`, `memory_tools`, and the `DEFAULT_MEMORY_CAP`
+  / `DEFAULT_RECALL_LIMIT` constants (decision D16 in `docs/EXTENSIBILITY.md`).
 
 ### Changed
 - **Breaking: `Approver::approve` / `needs_prompt` now take the tool's `Permission`.**
@@ -84,6 +91,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 - The `search` and `glob` tool docs linked a private constant, producing a `rustdoc`
   warning. Public docs no longer link a private item, and CI now builds the docs with
   warnings denied, so a broken intra-doc link fails the build instead of reaching a reader.
+- The `local` source test `a_program_that_does_not_speak_the_protocol_fails_to_load` no
+  longer relies on `echo` being an executable: `echo` is a shell builtin, so on Windows it
+  resolves to no program (and under MSYS to one that may not start). It now writes a tiny
+  fixture program instead, so the test runs on every platform.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead

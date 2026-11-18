@@ -334,6 +334,23 @@ MCP 的 `npx -y` 会在首次运行时自行拉包，所以"安装"对多数来�
 - `doctor` 对每个来源做一次装配探测，失败时打印**按 kind 定制的修复提示**并以非零码
   退出，因此可直接当 CI 门禁使用。
 
+### 3.7 记忆层 · Memory ✅
+
+记忆是**核心能力**而非一种工具来源，所以不走 `ToolSource`，而是三条缝各司其职：
+
+- **存储**：`Memory`（`crates/rsagent-agent/src/memory.rs`）是一个追加式 JSONL 笔记
+  文件，一行一条 `MemoryEntry`（`{at, text}`），超出容量时丢弃最旧的一条。它复用会话
+  文件已验证的"追加 + 截断尾行丢弃"约定，不新造崩溃恢复逻辑。
+- **装配**：`Agent::with_memory(Arc<Memory>)` 把存储注入循环；循环在每个请求前把最近
+  若干条笔记折进 system prompt（`system_prompt_with_memory`），并在压缩丢弃回合时
+  蒸馏出一条 `[compacted]` 笔记。同一存储也经 `ToolContext::with_memory` 到达工具。
+- **工具**：`memory_tools()` 返回 `remember` / `recall` 两个工具，**独立于
+  `builtin_tools()`**，仅当 `--memory <FILE>` 时由 `BuiltinSource::with_memory()` 追加
+  进装配结果——与 D2 一致：来源在装配期决定工具集，循环只见到扁平的工具列表。
+
+要替换存储后端（例如换成 SQLite），实现一个等价的 `Memory` 即可；要新增记忆类工具，
+扩展 `memory_tools()`。二者都不触及循环。
+
 ---
 
 ## 4. 平台适配拓展性 · Platform portability
@@ -484,6 +501,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D13 | 健康探针是**不透明闭包**（`HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource>>`），而非让 `Agent` 持有 `ToolSource` | 一旦循环持有来源，它就要理解"连接失败/超时/熔断"等来源专有状态，D2 的隔离随之瓦解。闭包把来源健康降维成纯数据（id/kind/reason），循环只负责"对比上一轮、发一次事件"。CLI 侧用 `Arc<[SourceEntry]>` 同时供探针轮询与运行后的快照，避免复制来源 |
 | D14 | 工具失败用 **`Err(String)`**，不引入结构化错误类型 | 工具失败最终是**给模型看的文本**，消息本身就是载荷；结构化枚举最后还是得字符串化给模型，却让每个工具作者都背一次声明与转换的成本。真正需要区分的类别（"来源不可达" vs "来源回了业务错误"）是**按代码路径结构化判定**的（`sources/local.rs` / `web.rs` 等直接喂熔断器），从不匹配消息文本——所以消息自由格式是有意的。需要更多信息的调用方，可读成功时的 `ToolResult::details` 或 `ToolExecutionEnd` 事件 |
 | D15 | 权限分级用**新增 `Tool::permission()` 类别**，而**保留 `requires_approval()` 布尔作为门禁**；`Approver` 的两个方法都接收 `Permission` | 门禁（"要不要审批"）与类别（"属于哪类副作用"）是两个正交问题：read 工具无需审批，但只要审批就必须知道是哪一类才能分级。把两者合成一个枚举会破坏"布尔门禁"的既有语义、波及配置字段与不变量 #4。类别由**循环在查表时顺带取得**并**传参**给 `Approver`（而非让 `CliApprover` 自建 name→类别 的旁表），保证"来源唯一"（呼应 M 的原则）。默认类别取最严的 `exec`：未分类的审批工具不会被 `--allow write`/`--allow network` 意外放行 |
+| D16 | 记忆层用**追加式 JSONL 笔记文件**（`Memory`）+ 两个**可选**工具，并把最近笔记**折进 system prompt**；压缩时把被丢弃的回合蒸馏成一条 `[compacted]` 笔记 | 否决"向量库 / 外部数据库"：为一个能力引入重依赖，违背①；否决"默认开启 `remember`/`recall`"：读写文件是副作用，默认开启会让每个用户凭空多出两个工具与一个隐式文件，改为 `--memory <FILE>` 显式 opt-in（呼应 D2"来源在装配期决定工具集"）。折进 system prompt 而非要求模型主动 `recall`：省一次工具往返，且与"每请求重建上下文"的既有路径一致（①）。蒸馏复用同一存储，让上下文管理的丢弃不再是永久损失，而非新增机制（④⑤）。存储沿用会话文件已验证的"追加 + 截断尾行丢弃"约定，不新造崩溃恢复逻辑 |
 
 ---
 

@@ -173,16 +173,19 @@ Before each request the transcript is measured (a rough `chars / 4` token estima
 if it would exceed three quarters of the model's context window, the **oldest whole
 turns** are dropped — oldest first — while the first and most recent turns are always
 kept. Turns are dropped whole so a tool call is never separated from its result. A
-`ContextCompacted` event reports how many messages went away.
+`ContextCompacted` event reports how many messages went away. With `--memory`, the dropped
+turns are also distilled into a single `[compacted]` memory note, so what compaction
+removes is not lost for good — see §7.
 
 每次请求前都会估算对话记录长度（粗略按 `字符数 / 4` 估算 token）；若超过模型上下文
 窗口的四分之三，就**按整轮丢弃最旧的回合**（从最旧开始），但始终保留第一轮与最近的
 回合。按整轮丢弃可确保工具调用与其结果永不被拆散。`ContextCompacted` 事件会报告
-丢弃了多少条消息。
+丢弃了多少条消息。开启 `--memory` 时，被丢弃的回合还会蒸馏成一条 `[compacted]` 记忆
+笔记，裁剪掉的内容不会彻底消失——见 §7。
 
 ---
 
-## 7. Sessions · 会话
+## 7. Sessions and memory · 会话与记忆
 
 `Context` is plain, serializable data (system prompt + messages + tool specs). A session
 file wraps it in a versioned envelope (`{"version":1,"context":{...}}`), so an older
@@ -194,6 +197,19 @@ different provider at will.
 版本的信封里（`{"version":1,"context":{...}}`），因此旧版本能识别、并**拒绝而非误读**
 新版本写出的文件。正因为 `Context` 只是数据，对话记录可被持久化、检视，或随意交给
 另一个提供商。
+
+Alongside a session, an optional **memory** file (`--memory <FILE>`) keeps notes that
+outlive the process: an append-only JSONL log of `MemoryEntry` (`{at, text}`). The newest
+notes are folded into the system prompt on every request, so the model sees them without a
+lookup, and compaction distills dropped turns into a `[compacted]` note. Memory is
+injected with `Agent::with_memory`; its `remember` / `recall` tools are added only when the
+flag is set (decision D16, [`EXTENSIBILITY.md` §3.7](EXTENSIBILITY.md)).
+
+除会话外，可选的**记忆**文件（`--memory <FILE>`）保存跨进程存活的笔记：一个追加式的
+JSONL 日志，一行一条 `MemoryEntry`（`{at, text}`）。最新的若干条笔记会在每个请求前折进
+system prompt，模型无需查询即可看到；裁剪时被丢弃的回合则蒸馏成一条 `[compacted]` 笔记。
+记忆经 `Agent::with_memory` 注入；其 `remember` / `recall` 工具仅在传入该参数时才加入
+（决策 D16，见 [`EXTENSIBILITY.md` §3.7](EXTENSIBILITY.md)）。
 
 ---
 
@@ -276,14 +292,16 @@ If you are learning the codebase, read in this order — it follows the data flo
    `skill`, `web`) plus `mcp.rs` (the protocol payloads the two MCP transports share) and
    `subprocess.rs` (the spawn/timeout/reply runner the two script sources share).
 9. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
+    `memory.rs` is the durable note store the loop folds into each request and distills
+    dropped turns into.
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` layers the user- and project-level config files,
     `tools.rs` implements the `tools` subcommands, `breakers.rs` persists circuit-breaker
     state across runs, `log.rs` appends the event stream to `--log`, and `session.rs` +
     `fs.rs` persist and atomically write sessions.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 213 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 230 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 213 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 230 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。
