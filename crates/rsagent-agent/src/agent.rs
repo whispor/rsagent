@@ -1,6 +1,6 @@
 //! The stateful agent: a turn loop that calls a model, executes tools, and emits events.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -79,6 +79,9 @@ pub struct Agent {
     system_prompt: String,
     messages: Vec<Message>,
     tools: Vec<Box<dyn Tool>>,
+    /// Tool name → its position in `tools`, so a call resolves its tool by name in O(1)
+    /// rather than scanning the list (which grows with MCP sources).
+    tool_index: HashMap<String, usize>,
     approver: Option<Box<dyn Approver>>,
     subscribers: Vec<UnboundedSender<AgentEvent>>,
     options: StreamOptions,
@@ -104,6 +107,7 @@ impl std::fmt::Debug for Agent {
             .field("system_prompt", &self.system_prompt)
             .field("messages", &self.messages.len())
             .field("tools", &self.tools.len())
+            .field("tool_index", &self.tool_index.len())
             .field("approver", &self.approver.is_some())
             .field("subscribers", &self.subscribers.len())
             .field("options", &self.options)
@@ -133,6 +137,7 @@ impl Agent {
             system_prompt: system_prompt.into(),
             messages: Vec::new(),
             tools: Vec::new(),
+            tool_index: HashMap::new(),
             approver: None,
             subscribers: Vec::new(),
             options: StreamOptions::default(),
@@ -153,6 +158,12 @@ impl Agent {
     /// Replace the tool set the agent may call.
     #[must_use]
     pub fn with_tools(mut self, tools: Vec<Box<dyn Tool>>) -> Self {
+        // Index by name once, so per-call lookups never scan the whole list.
+        self.tool_index = tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| (tool.spec().name, index))
+            .collect();
         self.tools = tools;
         self
     }
@@ -308,7 +319,9 @@ impl Agent {
     /// # Errors
     ///
     /// Returns [`AgentError::NoResult`] if the model stream ends without a result,
-    /// or [`AgentError::MaxTurnsExceeded`] if the agent hits its turn limit.
+    /// [`AgentError::MaxTurnsExceeded`] if the agent hits its turn limit, or
+    /// [`AgentError::ModelFailed`] if the model reports a terminal error. A user abort is
+    /// not an error: the run ends with `Ok(())`.
     pub async fn prompt(&mut self, input: impl Into<String>) -> Result<(), AgentError> {
         let user_message = Message::user(input);
         self.messages.push(user_message.clone());
@@ -343,8 +356,11 @@ impl Agent {
         let result = self.run_turns().await;
         self.is_streaming = false;
         self.pending_tool_calls.clear();
+        // Carry a count, not the transcript: the caller already holds the messages via
+        // `messages()`, and cloning the whole history into every subscriber (and, with
+        // `--log`, onto disk) would cost O(transcript) at the end of every run.
         self.emit(&AgentEvent::AgentEnd {
-            messages: self.messages.clone(),
+            message_count: self.messages.len(),
         });
         result
     }
@@ -382,14 +398,24 @@ impl Agent {
                 message: assistant_message.clone(),
             });
 
-            // A hard error or abort ends the run.
-            if matches!(stop_reason, StopReason::Error | StopReason::Aborted) {
+            // A user abort ends the run cleanly; a model error is a failure the caller
+            // must see, so it is returned rather than swallowed (see `AgentError`).
+            if stop_reason == StopReason::Aborted {
                 self.last_error = error_message;
                 self.emit(&AgentEvent::TurnEnd {
                     message: assistant_message,
                     tool_results: Vec::new(),
                 });
                 return Ok(());
+            }
+            if stop_reason == StopReason::Error {
+                let message = error_message.unwrap_or_else(|| "model request failed".to_string());
+                self.last_error = Some(message.clone());
+                self.emit(&AgentEvent::TurnEnd {
+                    message: assistant_message,
+                    tool_results: Vec::new(),
+                });
+                return Err(AgentError::ModelFailed { message });
             }
 
             if stop_reason == StopReason::ToolUse && !calls.is_empty() {
@@ -569,7 +595,7 @@ impl Agent {
     }
 
     async fn execute_one(&self, call_id: &str, name: &str, args: Value) -> Executed {
-        let Some(tool) = self.tools.iter().find(|tool| tool.spec().name == name) else {
+        let Some(tool) = self.tool_by_name(name) else {
             return Executed::error(call_id, name, format!("unknown tool: {name}"));
         };
 
@@ -622,9 +648,8 @@ impl Agent {
     /// Consult the approval policy for a tool call, emitting request/response events.
     async fn check_approval(&self, call_id: &str, tool_name: &str, args: &Value) -> bool {
         let requires = self
-            .tools
-            .iter()
-            .any(|tool| tool.spec().name == tool_name && tool.requires_approval());
+            .tool_by_name(tool_name)
+            .is_some_and(Tool::requires_approval);
         let Some(approver) = &self.approver else {
             return true;
         };
@@ -695,7 +720,11 @@ impl Agent {
             return 0;
         }
 
-        let mut total = estimate_tokens(&self.system_prompt, &self.messages);
+        // Measure each message once. The trimming loop then only sums slices of these
+        // counts, instead of re-serializing every message it considers.
+        let counts: Vec<usize> = self.messages.iter().map(message_chars).collect();
+        let system_chars = self.system_prompt.chars().count();
+        let mut total = to_tokens(system_chars + counts.iter().sum::<usize>());
         if total <= budget {
             return 0;
         }
@@ -705,7 +734,7 @@ impl Agent {
         let mut index = 1;
         while total > budget && index < last {
             let (start, end) = ranges[index];
-            total = total.saturating_sub(estimate_tokens("", &self.messages[start..end]));
+            total = total.saturating_sub(to_tokens(counts[start..end].iter().sum()));
             keep[index] = false;
             index += 1;
         }
@@ -761,16 +790,19 @@ impl Agent {
     }
 
     fn tool_label(&self, name: &str) -> String {
-        self.tools
-            .iter()
-            .find(|tool| tool.spec().name == name)
-            .map_or_else(|| name.to_string(), |tool| tool.label())
+        self.tool_by_name(name)
+            .map_or_else(|| name.to_string(), Tool::label)
     }
 
     fn tool_is_sequential(&self, name: &str) -> bool {
-        self.tools
-            .iter()
-            .any(|tool| tool.spec().name == name && tool.is_sequential())
+        self.tool_by_name(name).is_some_and(Tool::is_sequential)
+    }
+
+    /// The tool registered under `name`, via the name index.
+    fn tool_by_name(&self, name: &str) -> Option<&dyn Tool> {
+        self.tool_index
+            .get(name)
+            .map(|&index| self.tools[index].as_ref())
     }
 
     fn build_context(&self) -> Context {
@@ -895,12 +927,11 @@ fn turn_ranges(messages: &[Message]) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// A rough token estimate for a transcript slice plus an optional prefix.
+/// A rough token count for a character total.
 ///
 /// Four characters per token is close enough for a trimming decision and needs no
 /// tokenizer dependency.
-fn estimate_tokens(prefix: &str, messages: &[Message]) -> u64 {
-    let chars: usize = prefix.chars().count() + messages.iter().map(message_chars).sum::<usize>();
+fn to_tokens(chars: usize) -> u64 {
     u64::try_from(chars / 4).unwrap_or(u64::MAX)
 }
 

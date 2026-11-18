@@ -23,9 +23,9 @@ use std::time::Duration;
 use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
-    Agent, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource, McpHttpSource,
-    McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, Tool, ToolCatalog,
-    UnhealthySource, WebSource, WebSourceConfig,
+    Agent, AgentError, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource,
+    McpHttpSource, McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, Tool,
+    ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
@@ -249,16 +249,20 @@ async fn main() -> anyhow::Result<()> {
                 "(faux) you said: {prompt}"
             ))]);
         }
-        run_prompt(&mut agent, &mut rx, &mut renderer, &mut log, prompt).await?;
+        let result = run_prompt(&mut agent, &mut rx, &mut renderer, &mut log, prompt).await;
+        // Persist before acting on the result, so a failed run is still recorded.
         if let Some(session) = &mut session {
             session.save(&agent, palette);
         }
         save_breakers(&mut breakers, &sources, palette);
-        // A model-level failure (bad key, network error, provider refusal) ends the
-        // run "successfully" as far as the loop is concerned. In one-shot `--print`
-        // mode that must still be visible to scripts and CI, so exit non-zero; the
-        // renderer has already reported the reason on stderr.
-        if agent.error_message().is_some() {
+        // A model-level failure (bad key, network error, provider refusal) ends the run
+        // "successfully" as far as the loop is concerned, and the renderer has already
+        // reported the reason on stderr. In one-shot `--print` mode that must still be
+        // visible to scripts and CI, so exit non-zero; any other error propagates.
+        if let Err(error) = result {
+            if !is_model_failure(&error) {
+                return Err(error);
+            }
             std::process::exit(1);
         }
         return Ok(());
@@ -284,6 +288,15 @@ async fn main() -> anyhow::Result<()> {
     .await;
     save_breakers(&mut breakers, &sources, palette);
     result
+}
+
+/// Whether an error is a model-level failure — one the renderer has already reported as an
+/// event — as opposed to a structural failure the caller must surface.
+fn is_model_failure(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<AgentError>(),
+        Some(AgentError::ModelFailed { .. })
+    )
 }
 
 /// Open the `--log` sink, or a no-op sink when `--log` was not passed.
@@ -865,7 +878,14 @@ async fn run_repl(
             ))]);
         }
 
-        run_prompt(agent, rx, renderer, log, input_text.to_string()).await?;
+        // A model failure is already shown to the user (the renderer reports it as an
+        // event), so keep the REPL alive rather than tearing the session down over one
+        // bad turn. Any other error is fatal.
+        match run_prompt(agent, rx, renderer, log, input_text.to_string()).await {
+            Ok(()) => {}
+            Err(error) if is_model_failure(&error) => {}
+            Err(error) => return Err(error),
+        }
         if let Some(session) = session.as_deref_mut() {
             session.save(agent, renderer.palette);
         }
@@ -886,12 +906,11 @@ async fn run_prompt(
     let prompt = agent.prompt(input).fuse();
     tokio::pin!(prompt);
 
-    loop {
+    // Hold the outcome rather than propagating it here: a failing run still has events
+    // queued (the error itself is one), and they must be rendered before we return.
+    let outcome = loop {
         tokio::select! {
-            result = &mut prompt => {
-                result?;
-                break;
-            }
+            result = &mut prompt => break result,
             Some(event) = rx.recv() => {
                 log.append(&event);
                 renderer.render(&event);
@@ -901,7 +920,7 @@ async fn run_prompt(
                 cancel.cancel();
             }
         }
-    }
+    };
 
     // Drain any events that were queued right before completion.
     while let Ok(event) = rx.try_recv() {
@@ -910,7 +929,7 @@ async fn run_prompt(
     }
     renderer.flush_line();
     renderer.finish_prompt();
-    Ok(())
+    outcome.map_err(anyhow::Error::from)
 }
 
 /// How the CLI answers approval requests.

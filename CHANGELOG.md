@@ -34,6 +34,27 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   the whole provider lifetime, instead of building a fresh client per request. This
   removes repeated TCP/TLS setup on multi-turn runs. The client is created with no
   request timeout on purpose, so long-lived streams are never cut off.
+- **Breaking: `Agent::prompt` / `continue_run` now return `AgentError::ModelFailed` when
+  the model reports a terminal error**, instead of returning `Ok(())`. A model failure was
+  already reported as an event and via `Agent::error_message`, but returning it as well
+  means a caller writing `prompt(..).await?` can no longer mistake the failure for
+  success. A user-initiated `abort` is still not an error. The CLI is unchanged in
+  behaviour (it still exits non-zero on `--print`, and the REPL still survives a failed
+  turn).
+- **Breaking: `AgentEvent::AgentEnd` carries `message_count: usize` instead of the full
+  `messages` transcript.** The transcript is available via `Agent::messages`, so cloning
+  it into every subscriber — and, with `--log`, onto disk — was pure overhead at the end
+  of every run. Update `AgentEnd { messages }` matches to `AgentEnd { message_count }`.
+
+### Fixed
+- A failing run's error event is now rendered before the process returns. Previously a
+  model error could be queued but never printed when the run ended in the same poll.
+
+### Performance
+- The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead
+  of scanning the list (which grows with MCP sources) up to four times per call.
+- Context compaction measures each message once, instead of re-serializing every message
+  it considers while trimming.
 
 ## [0.1.0] - 2026-11-18
 

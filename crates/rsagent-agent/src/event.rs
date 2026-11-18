@@ -112,7 +112,10 @@ pub enum AgentEvent {
     },
     /// The final event of a run.
     AgentEnd {
-        /// The full transcript at the end of the run.
-        messages: Vec<Message>,
+        /// How many messages the transcript holds at the end of the run. The messages
+        /// themselves are not carried: the caller already holds them (for example via
+        /// [`Agent::messages`](crate::Agent::messages)), and cloning the whole transcript
+        /// into every subscriber — and, with `--log`, onto disk — would be wasteful.
+        message_count: usize,
     },
 }

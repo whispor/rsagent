@@ -143,16 +143,22 @@ async fn a_newly_unhealthy_source_is_reported_once() {
 }
 
 #[tokio::test]
-async fn a_model_error_ends_the_run_without_failing() {
+async fn a_model_error_surfaces_as_a_failure() {
     let (mut agent, _faux, _events) = harness(Vec::new());
 
-    agent
+    let error = agent
         .prompt("hi")
         .await
-        .expect("a model error is not an agent failure");
+        .expect_err("a model error must surface, not be swallowed");
 
+    assert!(
+        matches!(error, AgentError::ModelFailed { .. }),
+        "expected ModelFailed, got {error:?}"
+    );
+    // The failed turn is still recorded, and the reason is readable off the agent.
     let last = agent.messages().last().expect("an assistant message");
     assert_eq!(last.role_str(), "assistant");
+    assert!(agent.error_message().is_some());
 }
 
 #[tokio::test]
