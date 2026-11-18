@@ -331,7 +331,8 @@ MUST NOT 出现平台条件编译）。工作区当前唯一的平台差异是 `
    你把规范化路径与非规范化路径放在一起比较，MUST 先让两边都过同一个 `normalize_path`，
    否则围栏会误判。
 2. 测试里构造路径 MUST 用 `Path::join` / `PathBuf`，MUST NOT 手拼 `/` 或 `\`。
-3. 会话文件写入 SHOULD 走"写临时文件 + 原子 rename"，避免断电/并发下写出半个 JSON。
+3. ✅ 会话文件写入走"写临时文件 + 原子 rename"（`rsagent/src/session.rs::write_atomic`），
+   避免断电/并发下写出半个 JSON。
 4. 行尾：仓库当前由 Git 处理 CRLF（`.gitattributes` SHOULD 显式声明 `* text=auto eol=lf`），
    代码里 MUST NOT 假定 `\n`。
 5. 大小写：Windows/macOS 默认大小写不敏感，**工具名与路径比较 MUST NOT 依赖大小写敏感**。
@@ -409,7 +410,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | 项 | 内容 |
 | --- | --- |
 | P3-1 | `rsagent tools list / doctor / add / remove`（§3.6） |
-| P3-2 | 会话文件原子写（§4.2 陷阱 3） |
+| P3-2 | ✅ 会话文件原子写（§4.2 陷阱 3） |
 | P3-3 | `STABILITY.md` + MSRV 声明（§5） |
 | P3-4 | 会话 JSONL 追加模式（§5） |
 
