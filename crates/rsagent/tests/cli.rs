@@ -71,6 +71,7 @@ fn help_lists_the_flags() {
         "--thinking",
         "--list-tools",
         "--json",
+        "--allow",
     ] {
         assert!(
             stdout.contains(flag),
@@ -92,6 +93,35 @@ fn unknown_tool_names_are_reported() {
         stderr.contains("unknown tool in --tools: nope"),
         "unexpected stderr: {stderr}"
     );
+}
+
+#[test]
+fn an_unknown_permission_category_is_rejected() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--allow", "delete"])
+        .output()
+        .expect("run rsagent");
+
+    assert_eq!(output.status.code(), Some(2), "usage errors exit 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown permission category `delete`"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("read, write, exec, network"),
+        "the error must list the valid categories: {stderr}"
+    );
+}
+
+#[test]
+fn allow_accepts_known_categories() {
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--allow", "read,network"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
 }
 
 #[test]
@@ -134,6 +164,15 @@ fn list_tools_prints_the_builtins_and_exits() {
     assert!(
         stdout.contains("需审批"),
         "the approval column is missing: {stdout}"
+    );
+    // Each row also carries the tool's permission category.
+    assert!(
+        stdout.contains("[read]"),
+        "the read category is missing: {stdout}"
+    );
+    assert!(
+        stdout.contains("[exec]"),
+        "the exec category is missing: {stdout}"
     );
 }
 

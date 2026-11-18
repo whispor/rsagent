@@ -647,26 +647,28 @@ impl Agent {
 
     /// Consult the approval policy for a tool call, emitting request/response events.
     async fn check_approval(&self, call_id: &str, tool_name: &str, args: &Value) -> bool {
-        let requires = self
-            .tool_by_name(tool_name)
-            .is_some_and(Tool::requires_approval);
         let Some(approver) = &self.approver else {
             return true;
         };
-        if !requires {
+        let Some(tool) = self.tool_by_name(tool_name) else {
+            return true;
+        };
+        if !tool.requires_approval() {
             return true;
         }
+        let permission = tool.permission();
 
         // Only announce a request the UI should actually prompt for; an approver that
-        // decides on its own (allow-all, deny-all, "stop asking") skips the prompt.
-        if approver.needs_prompt(tool_name) {
+        // decides on its own (allow-all, deny-all, "stop asking", or an auto-approved
+        // category) skips the prompt.
+        if approver.needs_prompt(tool_name, permission) {
             self.emit(&AgentEvent::ToolApprovalRequest {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
                 args: args.clone(),
             });
         }
-        let allowed = approver.approve(tool_name, args).await;
+        let allowed = approver.approve(tool_name, permission, args).await;
         self.emit(&AgentEvent::ToolApprovalResponse {
             tool_call_id: call_id.to_string(),
             approved: allowed,

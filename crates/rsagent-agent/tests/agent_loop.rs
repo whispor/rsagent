@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rsagent_agent::{
-    builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence, UnhealthySource,
+    builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence, Permission, UnhealthySource,
 };
 use rsagent_ai::{FauxProvider, FauxResponse, Message, Models};
 use serde_json::{json, Value};
@@ -338,7 +338,7 @@ struct ScopedApprover {
 
 #[async_trait::async_trait]
 impl Approver for ScopedApprover {
-    async fn approve(&self, _tool_name: &str, args: &Value) -> bool {
+    async fn approve(&self, _tool_name: &str, _permission: Permission, args: &Value) -> bool {
         args.get("path")
             .and_then(Value::as_str)
             .is_some_and(|path| PathBuf::from(path).starts_with(&self.root))
@@ -377,6 +377,57 @@ async fn a_custom_approver_can_scope_writes_to_a_directory() {
     assert!(!outside.exists(), "a write outside the root must be denied");
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// A policy that decides purely by category: allow writes, deny everything else.
+struct CategoryApprover;
+
+#[async_trait::async_trait]
+impl Approver for CategoryApprover {
+    async fn approve(&self, _tool_name: &str, permission: Permission, _args: &Value) -> bool {
+        permission == Permission::Write
+    }
+
+    fn needs_prompt(&self, _tool_name: &str, _permission: Permission) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn a_category_approver_sees_each_tools_permission() {
+    let dir = std::env::temp_dir().join(format!("rsagent-cat-it-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let target = dir.join("ok.txt");
+    let marker = dir.join("ran.txt");
+
+    let (agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "write_file",
+                json!({ "path": target.to_string_lossy(), "content": "x" }),
+            )]),
+            FauxResponse::tool_calls(vec![(
+                "bash",
+                json!({ "command": format!("echo hi > {}", marker.display()) }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
+    let mut agent = agent.with_approver(CategoryApprover);
+
+    agent.prompt("go").await.expect("prompt completes");
+
+    assert!(
+        target.exists(),
+        "the write category must be allowed by the write-only policy"
+    );
+    assert!(
+        !marker.exists(),
+        "the exec category must be denied by the write-only policy"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]

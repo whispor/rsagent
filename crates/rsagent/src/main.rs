@@ -24,8 +24,8 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentError, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource,
-    McpHttpSource, McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, SourceKind,
-    Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
+    McpHttpSource, McpStdioSource, PathFence, Permission, SkillSource, SourceEntry, SourceHealth,
+    SourceKind, Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
@@ -124,6 +124,12 @@ struct Cli {
     /// Auto-approve every tool call (skip the confirmation prompt).
     #[arg(short = 'y', long)]
     yes: bool,
+
+    /// Auto-approve tools in these categories without prompting (comma-separated).
+    ///
+    /// Categories: read, write, exec, network. `--yes` is shorthand for all of them.
+    #[arg(long, value_delimiter = ',', value_name = "CATEGORY")]
+    allow: Vec<String>,
 
     /// Persist the conversation to a JSON file, resuming it if it already exists.
     #[arg(long)]
@@ -555,6 +561,7 @@ fn build_agent(
         .with_health_probe(probe)
         .with_approver(CliApprover {
             mode: approval,
+            allowed: allowed_categories(cli),
             input,
             palette,
             allow_all: Arc::new(AtomicBool::new(false)),
@@ -868,8 +875,9 @@ fn print_catalog(catalog: &ToolCatalog, palette: Palette) {
             palette.green("自动")
         };
         println!(
-            "  {:<13} {approval}  {}",
+            "  {:<13} {approval} [{:<7}]  {}",
             spec.name,
+            tool.permission(),
             truncate(&spec.description, 64)
         );
     }
@@ -1036,10 +1044,30 @@ enum ApprovalMode {
     Deny,
 }
 
+/// Resolve `--allow` into categories, exiting with code 2 on an unknown name.
+///
+/// `--yes` already means "allow everything", so this is for the finer case: trust some
+/// kinds of side effects (say network fetches) while still confirming the rest.
+fn allowed_categories(cli: &Cli) -> Arc<[Permission]> {
+    let mut allowed = Vec::new();
+    for name in &cli.allow {
+        if let Some(permission) = Permission::parse(name) {
+            allowed.push(permission);
+        } else {
+            let valid = Permission::ALL.map(Permission::as_str).join(", ");
+            eprintln!("error: unknown permission category `{name}` (expected one of: {valid})");
+            std::process::exit(2);
+        }
+    }
+    allowed.into()
+}
+
 /// An [`Approver`] driven by [`ApprovalMode`].
 #[derive(Debug, Clone)]
 struct CliApprover {
     mode: ApprovalMode,
+    /// Categories the user auto-approved with `--allow`; never prompted for.
+    allowed: Arc<[Permission]>,
     /// Shared with the REPL so both read the terminal through one reader.
     input: InputHandle,
     /// Styling for the CLI's own messages.
@@ -1050,14 +1078,17 @@ struct CliApprover {
 
 #[async_trait::async_trait]
 impl Approver for CliApprover {
-    async fn approve(&self, tool_name: &str, _args: &Value) -> bool {
+    async fn approve(&self, tool_name: &str, permission: Permission, _args: &Value) -> bool {
+        if self.allowed.contains(&permission) {
+            return true;
+        }
         match self.mode {
             ApprovalMode::Auto => true,
             ApprovalMode::Deny => {
                 eprintln!(
                     "{}",
                     self.palette.yellow(&format!(
-                        "· skipped {tool_name}: approval required (pass --yes to allow)"
+                        "· skipped {tool_name}: approval required (pass --yes or --allow {permission} to allow)"
                     ))
                 );
                 false
@@ -1088,8 +1119,10 @@ impl Approver for CliApprover {
         }
     }
 
-    fn needs_prompt(&self, _tool_name: &str) -> bool {
-        self.mode == ApprovalMode::Ask && !self.allow_all.load(Ordering::Relaxed)
+    fn needs_prompt(&self, _tool_name: &str, permission: Permission) -> bool {
+        !self.allowed.contains(&permission)
+            && self.mode == ApprovalMode::Ask
+            && !self.allow_all.load(Ordering::Relaxed)
     }
 }
 

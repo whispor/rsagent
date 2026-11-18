@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::approval::Permission;
 use crate::glob::glob_match;
 use crate::html::html_to_text;
 use crate::platform;
@@ -134,6 +135,10 @@ impl Tool for ReadFileTool {
         "Read File".to_string()
     }
 
+    fn permission(&self) -> Permission {
+        Permission::Read
+    }
+
     async fn execute(
         &self,
         _call_id: &str,
@@ -214,6 +219,10 @@ impl Tool for WriteFileTool {
         "Write File".to_string()
     }
 
+    fn permission(&self) -> Permission {
+        Permission::Write
+    }
+
     fn is_sequential(&self) -> bool {
         true
     }
@@ -272,6 +281,10 @@ impl Tool for EditFileTool {
 
     fn label(&self) -> String {
         "Edit File".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Write
     }
 
     fn is_sequential(&self) -> bool {
@@ -351,6 +364,10 @@ impl Tool for ListDirTool {
         "List Directory".to_string()
     }
 
+    fn permission(&self) -> Permission {
+        Permission::Read
+    }
+
     async fn execute(
         &self,
         _call_id: &str,
@@ -410,6 +427,10 @@ impl Tool for SearchTool {
 
     fn label(&self) -> String {
         "Search".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Read
     }
 
     async fn execute(
@@ -490,6 +511,10 @@ impl Tool for GlobTool {
 
     fn label(&self) -> String {
         "Glob".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Read
     }
 
     async fn execute(
@@ -584,6 +609,10 @@ impl Tool for WebFetchTool {
 
     fn label(&self) -> String {
         "Fetch".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Network
     }
 
     fn requires_approval(&self) -> bool {
@@ -715,6 +744,10 @@ impl Tool for BashTool {
 
     fn label(&self) -> String {
         "Shell".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Exec
     }
 
     fn is_sequential(&self) -> bool {
@@ -897,6 +930,33 @@ mod tests {
                 "bash",
             ]
         );
+    }
+
+    #[test]
+    fn builtin_tools_declare_their_permission_category() {
+        use super::Permission;
+
+        let pairs: Vec<(String, Permission)> = builtin_tools()
+            .iter()
+            .map(|tool| (tool.spec().name, tool.permission()))
+            .collect();
+        let expected = [
+            ("read_file", Permission::Read),
+            ("write_file", Permission::Write),
+            ("edit_file", Permission::Write),
+            ("list_dir", Permission::Read),
+            ("search", Permission::Read),
+            ("glob", Permission::Read),
+            ("webfetch", Permission::Network),
+            ("bash", Permission::Exec),
+        ];
+        for (name, permission) in expected {
+            let found = pairs
+                .iter()
+                .find(|(candidate, _)| candidate == name)
+                .map(|(_, permission)| *permission);
+            assert_eq!(found, Some(permission), "category for {name}");
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use rsagent_ai::ToolSpec;
 use serde_json::Value;
 
+use crate::approval::Permission;
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
@@ -242,6 +243,10 @@ impl Tool for PrefixedTool {
 
     fn requires_approval(&self) -> bool {
         self.inner.requires_approval()
+    }
+
+    fn permission(&self) -> Permission {
+        self.inner.permission()
     }
 }
 

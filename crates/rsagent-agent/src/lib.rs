@@ -19,7 +19,7 @@ pub mod tool;
 pub mod tools;
 
 pub use agent::{Agent, HealthProbe};
-pub use approval::{AllowAll, Approver, DenyAll};
+pub use approval::{AllowAll, Approver, DenyAll, Permission};
 pub use breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 pub use cancel::CancelToken;
 pub use catalog::{CatalogError, SourceEntry, ToolCatalog, PREFIX_SEPARATOR};

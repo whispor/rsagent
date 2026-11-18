@@ -7,6 +7,7 @@ use rsagent_ai::{ContentBlock, ToolSpec};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::approval::Permission;
 use crate::cancel::CancelToken;
 
 /// Whether filesystem tools may reach outside the working directory.
@@ -233,5 +234,17 @@ pub trait Tool: Send + Sync {
     /// Tools that mutate the filesystem or run commands should return `true`.
     fn requires_approval(&self) -> bool {
         false
+    }
+
+    /// The kind of side effect this tool has, for category-aware [`Approver`] policies.
+    ///
+    /// Only consulted for tools that [`requires_approval`](Tool::requires_approval);
+    /// the default is [`Permission::Exec`], the most restrictive assumption, so a tool
+    /// that opts into approval but does not categorize itself is never silently
+    /// auto-approved by a "allow writes" or "allow network" policy.
+    ///
+    /// [`Approver`]: crate::approval::Approver
+    fn permission(&self) -> Permission {
+        Permission::Exec
     }
 }
