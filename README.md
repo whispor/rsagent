@@ -199,6 +199,26 @@ assembled tools.
 The precedence is **CLI flags > environment > `rsagent.toml` > built-in defaults**:
 `--tools` replaces a built-in source's `only`, and `--no-bash` adds to its `exclude`.
 
+#### Managing tool sources
+
+`rsagent tools` edits `rsagent.toml` for you and probes what you have:
+
+```bash
+rsagent tools list                     # sources, health, and the assembled tools
+rsagent tools doctor                   # probe every source; non-zero exit on failure
+rsagent tools add weather --kind web --url https://example.com/api --name get_weather
+rsagent tools remove weather
+```
+
+`add` / `remove` edit the file **in place**, preserving comments and formatting
+(`toml_edit`), so a hand-written `rsagent.toml` stays readable. The semantics are
+"edit config plus an idempotent preparation step": `add` writes the entry first, then
+best-effort runs the source's install hook (an offline endpoint or a missing program is
+reported, not rolled back), and `remove` only drops the entry and calls the source's
+uninstall hook. **Neither ever deletes your data.** `add` refuses a duplicate `id`
+rather than overwriting it. `doctor` is a usable CI gate: it exits non-zero if any source
+fails to load, printing a kind-specific fix hint.
+
 #### The `local` source protocol (version 1)
 
 A `local` source is any program that speaks a small JSON protocol. `rsagent` invokes it
@@ -359,6 +379,18 @@ source out of the tool list (see decision D9).
 | `--no-bash` | | Disable the `bash` tool. |
 | `--list-tools` | | List the tool sources and the assembled tools, then exit. |
 | `-V, --version` | | Print the version and exit. |
+
+**Subcommands** (run before anything else; they need no model or API key):
+
+| Command | Description |
+| --- | --- |
+| `rsagent tools list` | List every source, its health, and the assembled tools. |
+| `rsagent tools doctor` | Probe each source and report problems with a fix hint; non-zero exit on failure. |
+| `rsagent tools add <id> --kind <KIND> [fields]` | Append a `[[tools.sources]]` entry to `rsagent.toml`. |
+| `rsagent tools remove <id>` | Remove a source's entry from `rsagent.toml`. |
+
+Run `rsagent tools add --help` for the per-kind fields (`--url`, `--command`, `--path`,
+`--args`, `--prefix`, …).
 
 ## Built-in tools
 

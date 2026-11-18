@@ -276,20 +276,31 @@ Closed / Open / HalfOpen、连续失败计数、冷却翻倍且有上限、半�
 - 实现上复用 `rsagent-ai/src/providers/http.rs` 里 `send_with_retry` / `is_retryable_status`
   的分类思路：**先分清"可重试"与"不可重试"，再谈重试与熔断。**
 
-### 3.6 安装 / 卸载 / 体检 · Install, uninstall, doctor
+### 3.6 安装 / 卸载 / 体检 · Install, uninstall, doctor ✅
 
 CLI 只加一个子命令组，避免参数爆炸：
 
 ```bash
 rsagent tools list            # 每个来源、每个工具、健康状态
 rsagent tools doctor          # 逐个来源做一次探测，报告问题与修复建议
-rsagent tools add <source>    # 交互式写入 rsagent.toml
+rsagent tools add <source>    # 把一行 `[[tools.sources]]` 写进 rsagent.toml
 rsagent tools remove <id>     # 从 rsagent.toml 移除并调用 uninstall()
 ```
 
 **安装/卸载的语义 MUST 是"改配置 + 幂等的准备动作"**，MUST NOT 在卸载时删除用户数据。
 MCP 的 `npx -y` 会在首次运行时自行拉包，所以"安装"对多数来源就是写一行配置——
 这是刻意的：**配置简单、操作便捷**优先于"完整的包管理器体验"。
+
+已实现（`crates/rsagent/src/tools.rs`）：
+
+- `add` / `remove` 用 `toml_edit` **原地编辑** `rsagent.toml`，保留注释与既有格式；
+  `[tools]` 表设为 *implicit*，文件里只出现 `[[tools.sources]]`，没有多余的表头。
+- **配置优先**：`add` 先写盘，再 best-effort 跑该来源的 `install()`。端点离线、程序
+  缺失都只提示、不回滚——"先让配置正确"本身就是目的。
+- `remove` 只删配置项，并 best-effort 调该来源的 `uninstall()`；两者都 MUST 幂等，
+  且 MUST NOT 触碰用户数据。
+- `doctor` 对每个来源做一次装配探测，失败时打印**按 kind 定制的修复提示**并以非零码
+  退出，因此可直接当 CI 门禁使用。
 
 ---
 
@@ -367,7 +378,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
 | 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
-| 子命令结构 | `tools` / `mcp` / `config` 分组 | 全平铺在顶层参数 | **SHOULD 分组**（§3.6） |
+| 子命令结构 | `tools` / `mcp` / `config` 分组 | ✅ 已支持：`rsagent tools list / doctor / add / remove`（§3.6） | **SHOULD 分组**（§3.6） |
 
 ---
 
@@ -409,7 +420,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 
 | 项 | 内容 |
 | --- | --- |
-| P3-1 | `rsagent tools list / doctor / add / remove`（§3.6） |
+| P3-1 | ✅ `rsagent tools list / doctor / add / remove`（§3.6） |
 | P3-2 | ✅ 会话文件原子写（§4.2 陷阱 3） |
 | P3-3 | ✅ `STABILITY.md` + MSRV 声明（§5） |
 | P3-4 | ✅ 会话 JSONL 追加模式（§5） |
@@ -435,6 +446,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D8 | `skill` 来源用 `skill.toml` 清单自描述，而非"扫描文件夹猜工具" | 清单可在**不运行**任何脚本的前提下校验（目录、`SKILL.md`、脚本存在性），且工具名/描述/参数是显式的，不需要约定俗成的目录布局 |
 | D9 | `web` 来源把"收到任意 HTTP 响应"判为**业务**失败，只有 transport 错误才熔断 | 与子进程来源"非零退出即连接类"不同：HTTP 一旦应答就证明端点可达；若把 4xx 也算连接类，模型传错参数（400）就会熔断掉整个来源 |
 | D10 | `--json` 直接给事件类型 `derive(Serialize)`（内部标签 `type` + camelCase），而非手写映射 | 手写映射会与枚举定义漂移（加一个变体就漏一个），违背⑤；复用 `ContentBlock`/`Message` 已有的 `type` 标签约定，嵌套事件自然拼成同一种形状，也最省代码（①）。事件类型本就只含字符串/数字/已可序列化的消息，序列化不会失败 |
+| D11 | `tools add` / `remove` 用 `toml_edit` **原地编辑**配置，而非 `toml` 反序列化后整体重写 | 反序列化 + 重写会把用户手写的注释、空行、字段顺序全部抹掉——一次 `add` 就把可读的配置"洗"成机器风格，用户不再敢手改。`toml_edit` 只动目标那一处，其余字节原样保留。代价是多一个依赖，但配置文件的"可手改"本身就是本项目的一条隐性契约（③④） |
 
 ---
 
