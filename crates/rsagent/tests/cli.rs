@@ -72,6 +72,7 @@ fn help_lists_the_flags() {
         "--list-tools",
         "--json",
         "--allow",
+        "--memory",
     ] {
         assert!(
             stdout.contains(flag),
@@ -174,6 +175,66 @@ fn list_tools_prints_the_builtins_and_exits() {
         stdout.contains("[exec]"),
         "the exec category is missing: {stdout}"
     );
+}
+
+#[test]
+fn memory_enables_the_remember_and_recall_tools() {
+    let dir = temp_dir("memory-tools");
+    let memory = dir.join("notes.jsonl");
+
+    // Without `--memory` the memory tools are not offered, so a default run never
+    // advertises tools that would only fail.
+    let without = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+    let without_tools = listed_tools(&String::from_utf8_lossy(&without.stdout));
+    assert!(!without_tools.contains(&"remember".to_string()));
+    assert!(!without_tools.contains(&"recall".to_string()));
+
+    // With it, both appear.
+    let with = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .arg("--memory")
+        .arg(&memory)
+        .output()
+        .expect("run rsagent");
+    assert!(with.status.success(), "exit status: {:?}", with.status);
+    let with_tools = listed_tools(&String::from_utf8_lossy(&with.stdout));
+    assert!(
+        with_tools.contains(&"remember".to_string()),
+        "`remember` is missing: {with_tools:?}"
+    );
+    assert!(
+        with_tools.contains(&"recall".to_string()),
+        "`recall` is missing: {with_tools:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn memory_announces_its_path() {
+    let dir = temp_dir("memory-announce");
+    let memory = dir.join("notes.jsonl");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "hi", "--memory"])
+        .arg(&memory)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("memory:"),
+        "the memory path should be announced on stderr: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

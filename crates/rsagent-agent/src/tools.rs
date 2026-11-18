@@ -15,6 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::approval::Permission;
 use crate::glob::glob_match;
 use crate::html::html_to_text;
+use crate::memory::DEFAULT_RECALL_LIMIT;
 use crate::platform;
 use crate::tool::{Tool, ToolContext, ToolResult};
 
@@ -868,6 +869,112 @@ where
     out
 }
 
+/// The error the memory tools return when the agent has no memory attached.
+fn memory_disabled() -> String {
+    "memory is not enabled; start rsagent with `--memory <FILE>` to use it".to_string()
+}
+
+/// Record a durable note in long-term memory.
+///
+/// The note survives the session: the newest notes are folded into the system prompt of
+/// every later request, so a fact learned once need not be re-derived. This is the only
+/// tool that writes memory; it needs no approval because it touches only the memory file,
+/// never the working tree.
+#[derive(Debug)]
+pub struct RememberTool;
+
+#[async_trait]
+impl Tool for RememberTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "remember",
+            "Record a durable note in long-term memory — a fact, a preference, or a lesson worth keeping across sessions. The newest notes are shown to you at the start of each request. Requires memory to be enabled (`--memory`).",
+            object_schema(
+                &json!({ "text": { "type": "string", "description": "The note to remember" } }),
+                &["text"],
+            ),
+        )
+    }
+
+    fn label(&self) -> String {
+        "Remember".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Write
+    }
+
+    fn is_sequential(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        args: Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        let text = required_str(&args, "text")?;
+        let memory = context.memory().ok_or_else(memory_disabled)?;
+        memory.append(&text)?;
+        Ok(ToolResult::text(
+            "Remembered. It will be shown at the start of future requests.",
+        ))
+    }
+}
+
+/// Read back the most recent notes from long-term memory.
+///
+/// Read-only, so it needs no approval. The output mirrors what is folded into the system
+/// prompt, so the model sees the same view whether it recalls or the prompt injects.
+#[derive(Debug)]
+pub struct RecallTool;
+
+#[async_trait]
+impl Tool for RecallTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "recall",
+            "Read back the most recent notes from long-term memory, oldest first. Requires memory to be enabled (`--memory`).",
+            object_schema(
+                &json!({ "limit": { "type": "integer", "description": "How many notes to return (default 20)" } }),
+                &[],
+            ),
+        )
+    }
+
+    fn label(&self) -> String {
+        "Recall".to_string()
+    }
+
+    fn permission(&self) -> Permission {
+        Permission::Read
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        args: Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        let limit = opt_count(&args, "limit", DEFAULT_RECALL_LIMIT);
+        let memory = context.memory().ok_or_else(memory_disabled)?;
+        let rendered = memory.render(limit);
+        if rendered.is_empty() {
+            return Ok(ToolResult::text("(no notes in memory)"));
+        }
+        Ok(ToolResult::text(rendered))
+    }
+}
+
+/// The long-term-memory tools, offered only when memory is enabled.
+///
+/// Kept out of [`builtin_tools`] so a run without `--memory` never advertises tools that
+/// would only fail.
+pub fn memory_tools() -> Vec<Box<dyn Tool>> {
+    vec![Box::new(RememberTool), Box::new(RecallTool)]
+}
+
 /// The default coding-agent tool set.
 pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
     vec![
@@ -957,6 +1064,37 @@ mod tests {
                 .map(|(_, permission)| *permission);
             assert_eq!(found, Some(permission), "category for {name}");
         }
+    }
+
+    #[test]
+    fn memory_tools_are_separate_from_the_builtin_set() {
+        assert_eq!(names(&super::memory_tools()), vec!["remember", "recall"]);
+        assert!(!names(&builtin_tools()).contains(&"remember".to_string()));
+    }
+
+    #[test]
+    fn memory_tools_declare_their_permission_category() {
+        use super::Permission;
+
+        let pairs: Vec<(String, Permission)> = super::memory_tools()
+            .iter()
+            .map(|tool| (tool.spec().name, tool.permission()))
+            .collect();
+        assert!(pairs.contains(&("remember".to_string(), Permission::Write)));
+        assert!(pairs.contains(&("recall".to_string(), Permission::Read)));
+    }
+
+    #[tokio::test]
+    async fn memory_tools_error_without_a_memory() {
+        use super::{Tool, ToolContext};
+        use serde_json::json;
+
+        let context = ToolContext::new(".");
+        let error = super::RememberTool
+            .execute("c1", json!({ "text": "x" }), &context)
+            .await
+            .expect_err("no memory is attached");
+        assert!(error.contains("--memory"), "error names the flag: {error}");
     }
 
     #[test]

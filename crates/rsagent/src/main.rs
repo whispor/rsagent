@@ -24,8 +24,9 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentError, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource,
-    McpHttpSource, McpStdioSource, PathFence, Permission, SkillSource, SourceEntry, SourceHealth,
-    SourceKind, Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
+    McpHttpSource, McpStdioSource, Memory, PathFence, Permission, SkillSource, SourceEntry,
+    SourceHealth, SourceKind, Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
+    DEFAULT_MEMORY_CAP,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
@@ -138,6 +139,13 @@ struct Cli {
     /// Resume the default session file (`.rsagent-session.json`).
     #[arg(long = "continue")]
     continue_: bool,
+
+    /// Persist long-term memory to a JSONL file and enable the `remember`/`recall` tools.
+    ///
+    /// The newest notes are folded into the system prompt on every request, so knowledge
+    /// recorded in one session is available in the next.
+    #[arg(long, value_name = "FILE")]
+    memory: Option<PathBuf>,
 
     /// Disable ANSI colors (also disabled by the `NO_COLOR` environment variable).
     #[arg(long)]
@@ -343,6 +351,11 @@ fn open_event_log(cli: &Cli, palette: Palette) -> log::EventLog {
 /// directory, and how many sources and tools were assembled. The per-source breakdown is
 /// printed separately by [`build_catalog`]; this line is the at-a-glance header.
 fn log_startup_summary(cli: &Cli, model: &Model, sources: &[SourceEntry], palette: Palette) {
+    // Memory is a behaviour change worth naming even without `--verbose`: it enables two
+    // tools and folds past notes into the prompt.
+    if let Some(path) = &cli.memory {
+        eprintln!("{}", palette.dim(&format!("· memory: {}", path.display())));
+    }
     if !cli.verbose {
         return;
     }
@@ -552,7 +565,7 @@ fn build_agent(
         PathFence::WorkingDirectory
     };
 
-    let agent = Agent::new(models, model.clone(), system_prompt)
+    let mut agent = Agent::new(models, model.clone(), system_prompt)
         .with_tools(tools)
         .with_cwd(&cli.cwd)
         .with_path_fence(fence)
@@ -567,6 +580,9 @@ fn build_agent(
             allow_all: Arc::new(AtomicBool::new(false)),
         })
         .with_options(options);
+    if let Some(path) = &cli.memory {
+        agent = agent.with_memory(Arc::new(Memory::new(path.clone(), DEFAULT_MEMORY_CAP)));
+    }
 
     (agent, faux_handle, model)
 }
@@ -832,9 +848,12 @@ fn builtin_source(cli: &Cli, spec: Option<&SourceConfig>, palette: Palette) -> B
         exclude.push("bash".to_string());
     }
 
-    let source = BuiltinSource::new()
+    let mut source = BuiltinSource::new()
         .with_id(spec.map_or_else(|| "core".to_string(), |spec| spec.id.clone()))
         .with_selection(only, exclude);
+    if cli.memory.is_some() {
+        source = source.with_memory();
+    }
     for name in source.unknown() {
         eprintln!(
             "{}",

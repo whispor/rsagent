@@ -1,12 +1,17 @@
 //! End-to-end tests for the agent loop, driven by the offline `FauxProvider`.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use futures::stream;
 use rsagent_agent::{
-    builtin_tools, Agent, AgentError, AgentEvent, Approver, PathFence, Permission, UnhealthySource,
+    builtin_tools, memory_tools, Agent, AgentError, AgentEvent, Approver, Memory, PathFence,
+    Permission, UnhealthySource,
 };
-use rsagent_ai::{FauxProvider, FauxResponse, Message, Models};
+use rsagent_ai::{
+    AssistantMessage, ContentBlock, Context, EventStream, FauxProvider, FauxResponse, Message,
+    Model, Models, Provider, StopReason, StreamEvent, StreamOptions,
+};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -856,6 +861,144 @@ async fn edit_file_replaces_a_unique_match() {
     assert_eq!(
         std::fs::read_to_string(dir.join("f.txt")).expect("read file"),
         "alpha\nBETA\ngamma\n"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A provider that records the last request's [`Context`] and replies with fixed text.
+struct CapturingProvider {
+    last: Arc<Mutex<Option<Context>>>,
+}
+
+impl Provider for CapturingProvider {
+    fn id(&self) -> &'static str {
+        "capture"
+    }
+
+    fn models(&self) -> Vec<Model> {
+        vec![Model::openai_compatible("capture", "capture-1", "")]
+    }
+
+    fn stream(&self, model: Model, context: Context, _options: StreamOptions) -> EventStream {
+        *self.last.lock().expect("capture lock") = Some(context);
+        let mut message = AssistantMessage::partial(&model);
+        message.content.push(ContentBlock::text("ok"));
+        message.stop_reason = StopReason::Stop;
+        Box::pin(stream::iter(vec![StreamEvent::Done {
+            reason: StopReason::Stop,
+            message,
+        }]))
+    }
+}
+
+#[tokio::test]
+async fn memory_notes_are_folded_into_the_system_prompt() {
+    let dir = temp_dir("memory-prompt-it");
+    let memory = Arc::new(Memory::new(dir.join("notes.jsonl"), 10));
+    memory
+        .append("the project uses cargo nextest")
+        .expect("append");
+
+    let last = Arc::new(Mutex::new(None));
+    let mut models = Models::new();
+    models.register(CapturingProvider {
+        last: Arc::clone(&last),
+    });
+
+    let mut agent = Agent::new(
+        models,
+        Model::openai_compatible("capture", "capture-1", ""),
+        "base system",
+    )
+    .with_memory(Arc::clone(&memory));
+
+    agent.prompt("hi").await.expect("prompt completes");
+
+    let system = last
+        .lock()
+        .expect("capture lock")
+        .as_ref()
+        .expect("a request was made")
+        .system_prompt
+        .clone()
+        .expect("a system prompt was sent");
+    assert!(
+        system.starts_with("base system"),
+        "the base prompt is kept: {system}"
+    );
+    assert!(
+        system.contains("cargo nextest"),
+        "the memory note is folded in: {system}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn the_remember_tool_writes_to_memory() {
+    let dir = temp_dir("memory-remember-it");
+    let memory = Arc::new(Memory::new(dir.join("notes.jsonl"), 10));
+
+    let faux = FauxProvider::new();
+    faux.set_responses(vec![
+        FauxResponse::tool_calls(vec![("remember", json!({ "text": "prefer nextest" }))]),
+        FauxResponse::text("done"),
+    ]);
+    let mut models = Models::new();
+    models.register(faux.clone());
+
+    let mut tools = builtin_tools();
+    tools.extend(memory_tools());
+    let mut agent = Agent::new(models, faux.model(), "system")
+        .with_tools(tools)
+        .with_memory(Arc::clone(&memory));
+
+    agent
+        .prompt("remember this")
+        .await
+        .expect("prompt completes");
+
+    let notes = memory.recent(10).expect("read memory");
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.text.contains("prefer nextest")),
+        "the note was stored: {notes:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn compaction_distills_dropped_turns_into_memory() {
+    let dir = temp_dir("memory-compact-it");
+    let memory = Arc::new(Memory::new(dir.join("notes.jsonl"), 50));
+
+    let faux = FauxProvider::new();
+    faux.set_responses(vec![
+        FauxResponse::text("first answer"),
+        FauxResponse::text("second answer"),
+        FauxResponse::text("third answer"),
+    ]);
+    let mut models = Models::new();
+    models.register(faux.clone());
+
+    // A tiny window forces compaction once there are three turns to choose from; the
+    // middle turn is then dropped and distilled into memory.
+    let model = faux.model().with_context_window(8);
+    let mut agent = Agent::new(models, model, "system").with_memory(Arc::clone(&memory));
+
+    agent.prompt("first question").await.expect("turn 1");
+    agent.prompt("second question").await.expect("turn 2");
+    agent.prompt("third question").await.expect("turn 3");
+
+    let notes = memory.recent(50).expect("read memory");
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.text.contains("[compacted]") && note.text.contains("second question")),
+        "compaction recorded a digest of the dropped turn: {notes:?}"
     );
 
     std::fs::remove_dir_all(&dir).ok();

@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 mod glob;
 mod html;
+pub mod memory;
 mod platform;
 pub mod source;
 pub mod sources;
@@ -25,6 +26,7 @@ pub use cancel::CancelToken;
 pub use catalog::{CatalogError, SourceEntry, ToolCatalog, PREFIX_SEPARATOR};
 pub use error::AgentError;
 pub use event::AgentEvent;
+pub use memory::{Memory, MemoryEntry, DEFAULT_MEMORY_CAP, DEFAULT_RECALL_LIMIT};
 pub use source::{SourceHealth, SourceKind, ToolSource, UnhealthySource};
 pub use sources::{
     BuiltinSource, LocalSource, McpHttpSource, McpStdioSource, SkillSource, WebSource,
@@ -32,6 +34,6 @@ pub use sources::{
 };
 pub use tool::{PathFence, Tool, ToolContext, ToolResult};
 pub use tools::{
-    builtin_tools, select_builtin_tools, BashTool, EditFileTool, GlobTool, ListDirTool,
-    ReadFileTool, SearchTool, WebFetchTool, WriteFileTool,
+    builtin_tools, memory_tools, select_builtin_tools, BashTool, EditFileTool, GlobTool,
+    ListDirTool, ReadFileTool, RecallTool, RememberTool, SearchTool, WebFetchTool, WriteFileTool,
 };

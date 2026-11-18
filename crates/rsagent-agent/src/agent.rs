@@ -17,6 +17,7 @@ use crate::approval::Approver;
 use crate::cancel::CancelToken;
 use crate::error::AgentError;
 use crate::event::AgentEvent;
+use crate::memory::{Memory, DEFAULT_RECALL_LIMIT};
 use crate::source::UnhealthySource;
 use crate::tool::{PathFence, Tool, ToolContext};
 
@@ -83,6 +84,10 @@ pub struct Agent {
     /// rather than scanning the list (which grows with MCP sources).
     tool_index: HashMap<String, usize>,
     approver: Option<Box<dyn Approver>>,
+    /// Long-term memory, when the agent was built with one. Its newest notes are folded
+    /// into the system prompt each request, and it is written to when compaction drops
+    /// old turns, so context that leaves the window is not lost forever.
+    memory: Option<Arc<Memory>>,
     subscribers: Vec<UnboundedSender<AgentEvent>>,
     options: StreamOptions,
     cwd: PathBuf,
@@ -109,6 +114,7 @@ impl std::fmt::Debug for Agent {
             .field("tools", &self.tools.len())
             .field("tool_index", &self.tool_index.len())
             .field("approver", &self.approver.is_some())
+            .field("memory", &self.memory.is_some())
             .field("subscribers", &self.subscribers.len())
             .field("options", &self.options)
             .field("cwd", &self.cwd)
@@ -139,6 +145,7 @@ impl Agent {
             tools: Vec::new(),
             tool_index: HashMap::new(),
             approver: None,
+            memory: None,
             subscribers: Vec::new(),
             options: StreamOptions::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -174,6 +181,18 @@ impl Agent {
     #[must_use]
     pub fn with_approver(mut self, approver: impl Approver + 'static) -> Self {
         self.approver = Some(Box::new(approver));
+        self
+    }
+
+    /// Attach long-term memory.
+    ///
+    /// When set, the newest notes are folded into the system prompt of every request, the
+    /// `remember`/`recall` tools read and write it, and context compaction records a
+    /// digest of the turns it drops. Without one, the agent has no memory and none of
+    /// that happens.
+    #[must_use]
+    pub fn with_memory(mut self, memory: Arc<Memory>) -> Self {
+        self.memory = Some(memory);
         self
     }
 
@@ -605,6 +624,9 @@ impl Agent {
         if self.fence == PathFence::WorkingDirectory {
             context = context.with_fence(self.cwd.clone());
         }
+        if let Some(memory) = &self.memory {
+            context = context.with_memory(Arc::clone(memory));
+        }
 
         match tool.execute(call_id, args, &context).await {
             Ok(result) => Executed {
@@ -725,7 +747,7 @@ impl Agent {
         // Measure each message once. The trimming loop then only sums slices of these
         // counts, instead of re-serializing every message it considers.
         let counts: Vec<usize> = self.messages.iter().map(message_chars).collect();
-        let system_chars = self.system_prompt.chars().count();
+        let system_chars = self.system_prompt_with_memory().chars().count();
         let mut total = to_tokens(system_chars + counts.iter().sum::<usize>());
         if total <= budget {
             return 0;
@@ -742,9 +764,12 @@ impl Agent {
         }
 
         let mut rebuilt = Vec::with_capacity(self.messages.len());
+        let mut dropped_messages = Vec::new();
         for (idx, (start, end)) in ranges.iter().enumerate() {
             if keep[idx] {
                 rebuilt.extend_from_slice(&self.messages[*start..*end]);
+            } else {
+                dropped_messages.extend_from_slice(&self.messages[*start..*end]);
             }
         }
 
@@ -753,10 +778,32 @@ impl Agent {
             return 0;
         }
         self.messages = rebuilt;
+        self.distill(&dropped_messages);
         self.emit(&AgentEvent::ContextCompacted {
             dropped_messages: dropped,
         });
         dropped
+    }
+
+    /// Record a digest of the turns compaction just dropped, so context that leaves the
+    /// window is not lost forever.
+    ///
+    /// Best-effort: a memory write failure is ignored here, because the `remember` tool
+    /// already reports memory errors to the model and a failed note must not abort a run.
+    /// With no memory, or nothing worth keeping, this does nothing.
+    fn distill(&self, dropped: &[Message]) {
+        let Some(memory) = &self.memory else {
+            return;
+        };
+        let digest = distill_messages(dropped);
+        if digest.is_empty() {
+            return;
+        }
+        let note = format!(
+            "[compacted] dropped {} earlier message(s): {digest}",
+            dropped.len()
+        );
+        let _ = memory.append(&note);
     }
 
     /// Poll the health probe and announce each source that has newly turned unhealthy.
@@ -809,10 +856,29 @@ impl Agent {
 
     fn build_context(&self) -> Context {
         Context {
-            system_prompt: Some(self.system_prompt.clone()),
+            system_prompt: Some(self.system_prompt_with_memory()),
             messages: self.messages.clone(),
             tools: self.tools.iter().map(|tool| tool.spec()).collect(),
         }
+    }
+
+    /// The system prompt for the next request: the base prompt plus the newest memory
+    /// notes, when memory is enabled.
+    ///
+    /// Re-read every turn, so a note recorded mid-run is visible to the following request.
+    /// With no memory — or none recorded yet — this is exactly the base prompt.
+    fn system_prompt_with_memory(&self) -> String {
+        let Some(memory) = &self.memory else {
+            return self.system_prompt.clone();
+        };
+        let block = memory.render(DEFAULT_RECALL_LIMIT);
+        if block.is_empty() {
+            return self.system_prompt.clone();
+        }
+        let mut prompt = self.system_prompt.clone();
+        prompt.push_str("\n\n");
+        prompt.push_str(&block);
+        prompt
     }
 
     fn emit(&self, event: &AgentEvent) {
@@ -985,4 +1051,28 @@ fn message_chars(message: &Message) -> usize {
         _ => 0,
     };
     content
+}
+
+/// A one-line digest of dropped messages: the gist of each user turn, truncated.
+///
+/// Compaction drops whole turns, which are almost always user follow-ups and the tool
+/// work they triggered. Keeping the user text preserves *what was asked* without dragging
+/// tool output back into memory. At most five snippets of 120 characters each.
+fn distill_messages(messages: &[Message]) -> String {
+    let mut parts = Vec::new();
+    for message in messages {
+        let Message::User(user) = message else {
+            continue;
+        };
+        let text = ContentBlock::concat_text(&user.content);
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        parts.push(text.chars().take(120).collect::<String>());
+        if parts.len() >= 5 {
+            break;
+        }
+    }
+    parts.join(" | ")
 }

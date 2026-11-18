@@ -1,6 +1,7 @@
 //! The executable side of a tool.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rsagent_ai::{ContentBlock, ToolSpec};
@@ -9,6 +10,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::approval::Permission;
 use crate::cancel::CancelToken;
+use crate::memory::Memory;
 
 /// Whether filesystem tools may reach outside the working directory.
 ///
@@ -32,6 +34,8 @@ pub struct ToolContext {
     fence: Option<PathBuf>,
     progress: Option<UnboundedSender<String>>,
     cancel: CancelToken,
+    /// The long-term memory, when the agent was built with one.
+    memory: Option<Arc<Memory>>,
 }
 
 impl ToolContext {
@@ -42,6 +46,7 @@ impl ToolContext {
             fence: None,
             progress: None,
             cancel: CancelToken::new(),
+            memory: None,
         }
     }
 
@@ -59,6 +64,13 @@ impl ToolContext {
         self
     }
 
+    /// Attach the long-term memory the `remember` and `recall` tools read and write.
+    #[must_use]
+    pub fn with_memory(mut self, memory: Arc<Memory>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
     /// Constrain read tools to `root` (see [`resolve_within`](Self::resolve_within)).
     #[must_use]
     pub fn with_fence(mut self, root: impl Into<PathBuf>) -> Self {
@@ -69,6 +81,11 @@ impl ToolContext {
     /// The progress sink, if one was attached.
     pub fn progress(&self) -> Option<&UnboundedSender<String>> {
         self.progress.as_ref()
+    }
+
+    /// The long-term memory, if one was attached.
+    pub fn memory(&self) -> Option<&Arc<Memory>> {
+        self.memory.as_ref()
     }
 
     /// The cancellation token for this execution.

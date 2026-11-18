@@ -266,8 +266,8 @@ fn effective(inner: &Inner, now: Instant) -> BreakerState {
     }
 }
 
-/// Wall-clock seconds since the Unix epoch, for persisted reports.
-fn unix_now() -> u64 {
+/// Wall-clock seconds since the Unix epoch, for persisted reports and memory timestamps.
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
