@@ -113,6 +113,7 @@ impl Provider for AnthropicProvider {
         let extra_headers = options.headers;
         let max_retries = options.max_retries;
         let client = self.core.client().clone();
+        let missing_key = self.core.missing_key_message();
 
         Box::pin(stream! {
             let mut parser = AnthropicStreamParser::new(&model);
@@ -121,7 +122,7 @@ impl Provider for AnthropicProvider {
             let Some(api_key) = api_key else {
                 yield StreamEvent::Error {
                     reason: ErrorReason::Error,
-                    error: AssistantMessage::error(&model, "missing API key"),
+                    error: AssistantMessage::error(&model, missing_key),
                 };
                 return;
             };

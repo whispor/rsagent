@@ -97,6 +97,16 @@ impl Session {
         &self.path
     }
 
+    /// Whether loading dropped a truncated final line — a crash left a half-written record.
+    ///
+    /// Only meaningful after [`load`](Self::load). When true, the on-disk file is no longer
+    /// a clean prefix of the transcript, so the next save rewrites it whole. Surfaced so the
+    /// caller can tell the user that a partial record was discarded rather than silently
+    /// losing it.
+    pub(crate) fn dropped_truncated_tail(&self) -> bool {
+        self.rewrite
+    }
+
     /// Read the persisted transcript, if the file exists.
     ///
     /// # Errors

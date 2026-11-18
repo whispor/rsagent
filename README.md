@@ -104,6 +104,11 @@ ANTHROPIC_API_KEY=sk-ant-... cargo run -p rsagent -- \
   --print "explain this project"
 ```
 
+If no key is found for the default endpoint, rsagent stops **before** sending anything and
+prints the exact variable to set (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) plus the
+`--api-key` flag. A custom `--base-url` is treated as a local endpoint that may not need a
+key, so that case only warns.
+
 ### Interactive mode
 
 Run without `--print` to get a REPL:
@@ -504,7 +509,12 @@ answer, so scripts and CI can detect failures:
 | Code | Meaning |
 | --- | --- |
 | `0` | The run finished and the model produced an answer. |
-| `1` | A model-level failure (missing API key, network error, provider error) or the turn limit was hit. |
+| `1` | A model-level failure at run time (network error, provider error) or the turn limit was hit. |
+| `2` | A usage or configuration error caught before the run: bad flags, an unreadable `--log` path, a missing API key for the default endpoint, or a failed subcommand. |
+
+A missing API key is detected before anything is sent and exits `2` with the exact
+variable to set. `--json` keeps its machine contract instead, so there the failure
+surfaces as an error event on stdout (exit `1`).
 
 The interactive REPL never exits on a failed turn; it prints the error and waits for
 the next prompt.

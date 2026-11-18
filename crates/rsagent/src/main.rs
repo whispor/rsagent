@@ -46,6 +46,13 @@ Prefer small, focused changes. Explain briefly what you did.";
 /// cross-tool convention (`AGENTS.md`), so the same file also serves other agents.
 const PROJECT_INSTRUCTIONS: &str = "AGENTS.md";
 
+/// Environment variable the OpenAI-compatible provider reads its key from. Named once here
+/// so the preflight message and the provider registration can never disagree.
+const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
+
+/// Environment variable the Anthropic provider reads its key from. See above.
+const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+
 #[derive(Parser, Debug)]
 #[command(name = "rsagent", version, about = "A minimal Rust coding agent")]
 #[expect(
@@ -431,6 +438,17 @@ fn resume_session(session: &mut session::Session, agent: &mut Agent, cli: &Cli, 
             ))
         ),
     }
+    // A crash can leave a half-written final line; the loader drops it. Say so, rather than
+    // silently losing the tail of the transcript.
+    if session.dropped_truncated_tail() {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!(
+                "· {} ended with a truncated line (likely a crash); the partial record was dropped",
+                session.path().display()
+            ))
+        );
+    }
 }
 
 /// Build the model registry, the agent, and (in `--faux` mode) the scripted provider.
@@ -466,7 +484,7 @@ fn build_agent(
             "anthropic",
             base_url,
             model_id.clone(),
-            vec!["ANTHROPIC_API_KEY".to_string()],
+            vec![ANTHROPIC_API_KEY_ENV.to_string()],
         ));
         None
     } else {
@@ -478,7 +496,7 @@ fn build_agent(
             "openai",
             base_url,
             model_id.clone(),
-            vec!["OPENAI_API_KEY".to_string()],
+            vec![OPENAI_API_KEY_ENV.to_string()],
         ));
         None
     };
@@ -498,6 +516,10 @@ fn build_agent(
     let model = models
         .get_model(provider_id, model_key)
         .expect("requested model is registered");
+
+    // Fail fast (or warn) on a missing key, before the user types a prompt. The check
+    // borrows `models`, so it must run before the registry moves into the agent.
+    preflight_credentials(cli, &models, &model, palette);
 
     // Interactive sessions ask before running mutating tools; one-shot `--print`
     // denies them unless `--yes` is given, so automation is never surprised.
@@ -540,6 +562,55 @@ fn build_agent(
         .with_options(options);
 
     (agent, faux_handle, model)
+}
+
+/// Fail fast — or warn — when the selected provider has no usable API key.
+///
+/// Without this, a first-run user with no key types a prompt and only learns the problem
+/// after a round-trip, as a terse `✗ model error: missing API key`. The message here names
+/// the exact environment variable and the flags that fix it.
+///
+/// It does not run when the key is not needed or already known:
+/// - `--faux` is offline and `--api-key` always wins, so both are skipped;
+/// - `--json` keeps its machine contract (stdout stays JSON lines), so the failure is left
+///   to surface as an error event the consumer can parse;
+/// - a custom `--base-url` often points at a local endpoint that needs no key, so that case
+///   only warns, while the built-in cloud endpoints will certainly fail and stop here.
+fn preflight_credentials(cli: &Cli, models: &Models, model: &Model, palette: Palette) {
+    if cli.faux || cli.json || cli.api_key.is_some() {
+        return;
+    }
+    // Ask the provider itself, so the key-resolution rule lives in exactly one place.
+    let resolved = models
+        .get_provider(&model.provider)
+        .and_then(|provider| provider.resolve_auth(model).api_key)
+        .is_some();
+    if resolved {
+        return;
+    }
+
+    let env_var = if cli.anthropic {
+        ANTHROPIC_API_KEY_ENV
+    } else {
+        OPENAI_API_KEY_ENV
+    };
+    if cli.base_url.is_some() {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!(
+                "· no {env_var} found; continuing because --base-url was set (a local endpoint may not need a key)"
+            ))
+        );
+        return;
+    }
+    eprintln!(
+        "{}",
+        palette.red(&format!("· missing API key: no {env_var} is set"))
+    );
+    eprintln!("  → export {env_var}=<KEY>, or pass --api-key <KEY>");
+    eprintln!("  → for a local endpoint that needs no key, pass --base-url <URL>");
+    eprintln!("  → to try it offline with no model at all, pass --faux");
+    std::process::exit(2);
 }
 
 /// Compose the system prompt.

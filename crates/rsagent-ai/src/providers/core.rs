@@ -75,6 +75,20 @@ impl ProviderCore {
             .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
     }
 
+    /// The message to report when no API key could be resolved.
+    ///
+    /// Names the environment variable(s) the provider looks for, so the failure is
+    /// actionable — "missing API key" alone leaves the user guessing which key to set.
+    pub(super) fn missing_key_message(&self) -> String {
+        match self.env_keys.as_slice() {
+            [] => "missing API key".to_string(),
+            keys => format!(
+                "missing API key (set {} or pass one explicitly)",
+                keys.join(" / ")
+            ),
+        }
+    }
+
     /// The base URL to use for `model`: the override if set, else the model's own.
     pub(super) fn effective_base_url(&self, model: &Model) -> String {
         self.base_url_override

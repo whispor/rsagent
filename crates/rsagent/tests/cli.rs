@@ -197,9 +197,10 @@ fn a_zero_turn_limit_is_rejected() {
 
 #[test]
 fn a_print_run_without_an_api_key_exits_nonzero() {
-    // The default provider needs a key; with none it fails the turn, and `--print`
-    // must report that with a non-zero exit code so scripts can detect it. A temp
-    // working directory keeps any nearby `.env` from supplying a key.
+    // The default provider needs a key. With none, the run fails fast — before any request
+    // — with an actionable message, and `--print` reports that with a non-zero exit code so
+    // scripts can detect it. A temp working directory keeps any nearby `.env` from supplying
+    // a key.
     let dir = temp_dir("no-key");
     let output = rsagent()
         .current_dir(&dir)
@@ -214,10 +215,55 @@ fn a_print_run_without_an_api_key_exits_nonzero() {
         "a missing API key must fail the run: {:?}",
         output.status
     );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing key is a usage error, so exit 2"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("missing API key"),
         "stderr should explain the failure: {stderr}"
+    );
+    // The message must be actionable, not just a diagnosis.
+    assert!(
+        stderr.contains("OPENAI_API_KEY"),
+        "stderr should name the env var to set: {stderr}"
+    );
+    assert!(
+        stderr.contains("--api-key"),
+        "stderr should offer the --api-key flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("--faux"),
+        "stderr should mention the offline option: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_custom_base_url_without_a_key_only_warns() {
+    // A custom `--base-url` often points at a local endpoint that needs no key, so the
+    // preflight must warn and continue rather than refusing to start. Pointing at a
+    // guaranteed-closed port makes the turn fail fast, but the warning must still appear.
+    let dir = temp_dir("base-url-no-key");
+    let output = rsagent()
+        .current_dir(&dir)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("RSAGENT_API_KEY")
+        .args(["--print", "hi", "--base-url", "http://127.0.0.1:1/v1"])
+        .output()
+        .expect("run rsagent");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("continuing because --base-url was set"),
+        "a custom base URL should only warn about the missing key: {stderr}"
+    );
+    assert!(
+        !stderr.contains("missing API key: no"),
+        "the custom base URL must not trigger the fatal preflight: {stderr}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -843,6 +889,11 @@ fn a_truncated_jsonl_tail_is_tolerated() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("resumed 1 message(s)"), "stderr: {stderr}");
     assert!(!stderr.contains("could not read"), "stderr: {stderr}");
+    // Dropping the tail is reported, not silent.
+    assert!(
+        stderr.contains("truncated line"),
+        "stderr should say the tail was dropped: {stderr}"
+    );
 
     // Every line is now well-formed JSON: the truncated tail was cleaned up by the rewrite.
     let after = std::fs::read_to_string(&session).expect("read session");

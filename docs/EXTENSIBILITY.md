@@ -407,7 +407,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封；`.jsonl` 后缀启用 JSONL 追加模式 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 ✅ |
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.95，CI 有独立任务在 1.95 上构建校验 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
-| 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
+| 非交互模式 | `-p` / `--print` + 退出码 | ✅ 退出码语义完整：`0` 成功 / `1` 运行时模型失败 / `2` 运行前的用法或配置错误（含缺密钥预检）；`--json` 输出事件流供 CI 消费 | 保持 |
 | 子命令结构 | `tools` / `mcp` / `config` 分组 | ✅ 已支持：`rsagent tools list / doctor / add / remove / reset`（§3.6） | **SHOULD 分组**（§3.6） |
 
 ---

@@ -32,6 +32,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   `readme`, and the intra-workspace path dependencies now carry a `version`, so the three
   crates can be packaged and published to crates.io (in order: `rsagent-ai`,
   `rsagent-agent`, `rsagent`).
+- **Credential preflight** — before a run, rsagent checks that the selected provider has a
+  usable API key. If not, it stops with exit `2` and prints the exact variable to set
+  (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and the `--api-key` / `--base-url` / `--faux`
+  alternatives, instead of letting the first prompt come back as a terse model error. A
+  custom `--base-url` (a local endpoint may need no key) only warns; `--json` keeps its
+  machine contract and lets the failure surface as an error event.
 
 ### Changed
 - **HTTP providers reuse one `reqwest::Client`** (and therefore one connection pool) for
@@ -61,6 +67,11 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 - HTTP providers apply a 10-second **connect** timeout, so an unreachable endpoint fails
   fast instead of hanging the first turn. There is still deliberately no *request*
   timeout, so long-lived streams are never cut off.
+- The provider's `missing API key` error now names the environment variable(s) it looks
+  for, so a library caller gets a fix hint too, not just a diagnosis.
+- Resuming a `.jsonl` session that ends in a truncated line (a crash mid-write) now says
+  so on stderr. The partial record was already dropped and the file rewritten, but the
+  loss was silent.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead
