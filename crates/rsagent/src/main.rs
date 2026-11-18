@@ -6,6 +6,7 @@
     reason = "this binary is the CLI's output layer; printing to the terminal is its purpose"
 )]
 
+mod breakers;
 mod config;
 mod fs;
 mod input;
@@ -21,8 +22,9 @@ use std::time::Duration;
 use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
-    Agent, AgentEvent, Approver, BuiltinSource, LocalSource, McpHttpSource, McpStdioSource,
-    PathFence, SkillSource, SourceEntry, SourceHealth, ToolCatalog, WebSource, WebSourceConfig,
+    Agent, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource, McpHttpSource,
+    McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, Tool, ToolCatalog,
+    UnhealthySource, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
@@ -186,13 +188,25 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Seed persisted circuit-breaker state before any source does work, so a source that
+    // was cooling down in the last run stays out of rotation (§3.5). `--list-tools` and
+    // the run itself both see the same seeded state.
+    let mut breakers = breakers::BreakerStore::load(&cli.cwd);
+    breakers.seed(catalog.entries());
+
     if cli.list_tools {
         print_catalog(&catalog, palette);
         return Ok(());
     }
 
+    // Keep the sources (with their breakers) after handing the tools to the agent, so the
+    // run's trips can be snapshotted afterwards. `Arc` lets the agent's health probe share
+    // them too, without the loop ever naming a `ToolSource` (decision D2).
+    let (tools, sources) = catalog.into_parts();
+    let sources: Arc<[SourceEntry]> = sources.into();
+    let probe = health_probe(Arc::clone(&sources));
     let input = InputHandle::spawn();
-    let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette, catalog);
+    let (mut agent, faux_handle, model) = build_agent(&cli, input.clone(), palette, tools, probe);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     agent.subscribe(tx);
@@ -233,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(session) = &mut session {
             session.save(&agent, palette);
         }
+        save_breakers(&mut breakers, &sources, palette);
         // A model-level failure (bad key, network error, provider refusal) ends the
         // run "successfully" as far as the loop is concerned. In one-shot `--print`
         // mode that must still be visible to scripts and CI, so exit non-zero; the
@@ -251,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
     );
     println!("Type a prompt, or /help for commands ('exit' to quit).\n");
 
-    run_repl(
+    let result = run_repl(
         &mut agent,
         &mut rx,
         &mut renderer,
@@ -259,7 +274,47 @@ async fn main() -> anyhow::Result<()> {
         &input,
         session.as_mut(),
     )
-    .await
+    .await;
+    save_breakers(&mut breakers, &sources, palette);
+    result
+}
+
+/// Snapshot every source's breaker and persist it, reporting (but never failing on) an
+/// error — losing breaker state must not fail an otherwise-successful run.
+fn save_breakers(store: &mut breakers::BreakerStore, sources: &[SourceEntry], palette: Palette) {
+    store.capture(sources);
+    if let Err(error) = store.save() {
+        eprintln!(
+            "{}",
+            palette.yellow(&format!("· could not save breaker state: {error}"))
+        );
+    }
+}
+
+/// Build the health probe the agent polls each turn.
+///
+/// It reads the *live* sources' health (which reflects their circuit breakers) and hands
+/// the unhealthy ones to the loop as plain data, so the loop never sees a `ToolSource`
+/// (decision D2). The `Arc` keeps the sources alive and shared with the post-run snapshot.
+fn health_probe(sources: Arc<[SourceEntry]>) -> HealthProbe {
+    Arc::new(move || {
+        sources
+            .iter()
+            .filter_map(|entry| {
+                let source = entry.source();
+                match source.health() {
+                    SourceHealth::Unhealthy(reason) => Some(UnhealthySource {
+                        id: source.id().to_string(),
+                        kind: source.kind().as_str().to_string(),
+                        reason,
+                    }),
+                    // `SourceHealth` is `#[non_exhaustive]`; anything but unhealthy is
+                    // reported as nothing here.
+                    _ => None,
+                }
+            })
+            .collect()
+    })
 }
 
 /// Load a persisted transcript into the agent, reporting what happened.
@@ -298,7 +353,8 @@ fn build_agent(
     cli: &Cli,
     input: InputHandle,
     palette: Palette,
-    catalog: ToolCatalog,
+    tools: Vec<Box<dyn Tool>>,
+    probe: HealthProbe,
 ) -> (Agent, Option<FauxProvider>, Model) {
     let default_model = if cli.anthropic {
         "claude-3-5-sonnet-latest"
@@ -384,11 +440,12 @@ fn build_agent(
     };
 
     let agent = Agent::new(models, model.clone(), system_prompt)
-        .with_tools(catalog.into_tools())
+        .with_tools(tools)
         .with_cwd(&cli.cwd)
         .with_path_fence(fence)
         .with_max_turns(usize::try_from(cli.max_turns).unwrap_or(50))
         .with_session_id(format!("rsagent-{}", std::process::id()))
+        .with_health_probe(probe)
         .with_approver(CliApprover {
             mode: approval,
             input,

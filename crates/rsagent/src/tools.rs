@@ -1,17 +1,22 @@
-//! The `rsagent tools` subcommand group: list, doctor, add, remove
+//! The `rsagent tools` subcommand group: list, doctor, add, remove, reset
 //! (`docs/EXTENSIBILITY.md` §3.6).
 //!
 //! `add` and `remove` edit `rsagent.toml` in place, preserving comments and formatting
 //! (`toml_edit`). Their semantics are "edit config plus an idempotent preparation step"
 //! — never "delete user data": `remove` only drops the config entry and calls the
 //! source's own [`uninstall`](rsagent_agent::ToolSource::uninstall) hook.
+//!
+//! `list` and `doctor` report each source's health, seeded from the persisted breaker
+//! snapshot; `reset` clears that snapshot so a cooling-down source is retried at once
+//! (§3.5).
 
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use rsagent_agent::{SourceHealth, ToolSource};
+use rsagent_agent::{BreakerState, SourceHealth, ToolSource};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
+use crate::breakers::BreakerStore;
 use crate::config::{find_upward, Config, CONFIG_FILE};
 use crate::fs::write_atomic;
 use crate::render::Palette;
@@ -20,7 +25,7 @@ use crate::Cli;
 /// A top-level subcommand. Today the only group is `tools`.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
-    /// Manage tool sources: list, doctor, add, remove.
+    /// Manage tool sources: list, doctor, add, remove, reset.
     Tools {
         /// Which operation to run.
         #[command(subcommand)]
@@ -45,6 +50,11 @@ pub(crate) enum ToolsAction {
     Remove {
         /// The id of the source to remove.
         id: String,
+    },
+    /// Clear persisted circuit-breaker state so a cooling-down source is retried now.
+    Reset {
+        /// The id of the source to reset; omit to reset every source.
+        id: Option<String>,
     },
 }
 
@@ -105,12 +115,69 @@ async fn run_tools(action: &ToolsAction, cli: &Cli, palette: Palette) -> anyhow:
     match action {
         ToolsAction::List => {
             let catalog = crate::build_catalog(cli, palette).await?;
+            // Seed before printing so a cooling-down source shows as unhealthy (§3.5).
+            let store = BreakerStore::load(&cli.cwd);
+            store.seed(catalog.entries());
             crate::print_catalog(&catalog, palette);
+            print_breakers(&store, palette);
             Ok(())
         }
         ToolsAction::Doctor => doctor(cli, palette).await,
         ToolsAction::Add(args) => add(cli, args, palette).await,
         ToolsAction::Remove { id } => remove(cli, id, palette).await,
+        ToolsAction::Reset { id } => reset(cli, id.as_deref(), palette),
+    }
+}
+
+/// Clear persisted breaker state, for one source or all of them.
+///
+/// Idempotent by design: resetting a source that has no stored breaker (a `builtin`
+/// source never has one, for instance) reports "nothing to clear" rather than failing,
+/// so the command is safe to run in a loop or a CI step.
+fn reset(cli: &Cli, id: Option<&str>, palette: Palette) -> anyhow::Result<()> {
+    let mut store = BreakerStore::load(&cli.cwd);
+    let cleared = store.reset(id);
+    if cleared.is_empty() {
+        match id {
+            Some(id) => println!("{} 来源 `{id}` 没有熔断状态", palette.dim("·")),
+            None => println!("{} 没有熔断状态需要清除", palette.dim("·")),
+        }
+        return Ok(());
+    }
+    store.save()?;
+    println!(
+        "{} 已清除 {} 个来源的熔断状态（{}）：{}",
+        palette.green("✓"),
+        cleared.len(),
+        store.path().display(),
+        cleared.join("、")
+    );
+    Ok(())
+}
+
+/// Print the persisted breaker snapshot, when there is one to show.
+fn print_breakers(store: &BreakerStore, palette: Palette) {
+    if store.reports().is_empty() {
+        return;
+    }
+    println!();
+    println!("熔断器状态（来自 {}）：", store.path().display());
+    for (id, report) in store.reports() {
+        println!(
+            "  {id}  {}  失败 {} 次  冷却 {}s",
+            breaker_label(report.state, palette),
+            report.failures,
+            report.cooldown_secs
+        );
+    }
+}
+
+/// A short, coloured label for one breaker state.
+fn breaker_label(state: BreakerState, palette: Palette) -> String {
+    match state {
+        BreakerState::Closed => palette.green("关闭"),
+        BreakerState::Open => palette.yellow("开启"),
+        BreakerState::HalfOpen => palette.yellow("半开"),
     }
 }
 
@@ -121,6 +188,8 @@ async fn run_tools(action: &ToolsAction, cli: &Cli, palette: Palette) -> anyhow:
 /// Returns a message when at least one source failed to load, so `doctor` can be used as
 /// a CI gate.
 async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
+    // Seeding makes a persisted, still-cooling-down source show as unhealthy here too.
+    let store = BreakerStore::load(&cli.cwd);
     let config = match Config::load(&cli.cwd) {
         Ok((config, path)) => {
             match &path {
@@ -137,14 +206,19 @@ async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
 
     if config.tools.sources.is_empty() {
         let source = crate::builtin_source(cli, None, palette);
+        store.seed_source(&source);
         report(&source, palette);
+        print_breakers(&store, palette);
         return Ok(());
     }
 
     let mut failures = 0_usize;
     for spec in &config.tools.sources {
         match crate::build_source(cli, spec, palette).await {
-            Ok(source) => report(source.as_ref(), palette),
+            Ok(source) => {
+                store.seed_source(source.as_ref());
+                report(source.as_ref(), palette);
+            }
             Err(error) => {
                 failures += 1;
                 println!("{} {} [{}]：{error}", palette.red("✗"), spec.id, spec.kind);
@@ -154,6 +228,7 @@ async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
             }
         }
     }
+    print_breakers(&store, palette);
     if failures > 0 {
         anyhow::bail!("{failures} 个来源有问题");
     }

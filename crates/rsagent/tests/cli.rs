@@ -955,7 +955,7 @@ fn tools_help_lists_the_subcommands() {
 
     assert!(output.status.success(), "exit status: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for sub in ["list", "doctor", "add", "remove"] {
+    for sub in ["list", "doctor", "add", "remove", "reset"] {
         assert!(
             stdout.contains(sub),
             "`{sub}` is missing from `tools --help`: {stdout}"
@@ -1165,6 +1165,94 @@ fn tools_doctor_fails_on_an_unloadable_source() {
     assert!(stdout.contains("检查"), "a fix hint is expected: {stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("个来源有问题"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Write a breaker snapshot with one tripped source, at `dir`.
+///
+/// `opened_at` is far in the future so the cooldown can never have elapsed: the source
+/// stays `Open` no matter when the test runs.
+fn write_open_breaker(dir: &std::path::Path, id: &str) {
+    let snapshot = format!(
+        "{{\n  \"version\": 1,\n  \"breakers\": {{\n    \"{id}\": {{ \
+         \"state\": \"open\", \"failures\": 3, \"openedAtUnix\": 9999999999, \
+         \"cooldownSecs\": 60 }}\n  }}\n}}\n"
+    );
+    std::fs::write(dir.join(".rsagent-breakers.json"), snapshot).expect("write breaker file");
+}
+
+#[test]
+fn tools_reset_clears_a_persisted_breaker() {
+    let dir = temp_dir("tools-reset");
+    write_open_breaker(&dir, "api");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "reset", "api"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("api"), "stdout: {stdout}");
+    // The file is gone once nothing is tripped, so the next run starts clean.
+    assert!(
+        !dir.join(".rsagent-breakers.json").exists(),
+        "the snapshot must be removed when empty"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_reset_with_nothing_to_clear_is_a_no_op() {
+    let dir = temp_dir("tools-reset-empty");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "reset"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        output.status.success(),
+        "resetting nothing must still succeed: {:?}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("没有熔断状态"), "stdout: {stdout}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_list_shows_a_persisted_breaker() {
+    // A configured source whose breaker is stored as open must show as unhealthy, and
+    // the snapshot must be listed explicitly.
+    let dir = temp_dir("tools-list-breaker");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"web\"\nid = \"api\"\nurl = \"https://example.com/api\"\nname = \"call_api\"\n",
+    )
+    .expect("write rsagent.toml");
+    write_open_breaker(&dir, "api");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "list"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("熔断器状态"),
+        "the snapshot must be listed: {stdout}"
+    );
+    assert!(
+        stdout.contains("circuit open"),
+        "the seeded source must read as unhealthy: {stdout}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

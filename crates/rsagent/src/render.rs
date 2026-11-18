@@ -191,6 +191,19 @@ impl Renderer {
                     ))
                 );
             }
+            AgentEvent::SourceUnhealthy {
+                source_id,
+                kind,
+                reason,
+            } => {
+                self.flush_line();
+                eprintln!(
+                    "{}",
+                    self.palette.yellow(&format!(
+                        "· 工具来源 `{source_id}`（{kind}）不可用：{reason}"
+                    ))
+                );
+            }
             _ => {}
         }
     }
