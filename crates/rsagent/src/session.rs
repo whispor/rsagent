@@ -18,6 +18,7 @@ use rsagent_agent::Agent;
 use rsagent_ai::{Context, Message};
 use serde::{Deserialize, Serialize};
 
+use crate::fs::write_atomic;
 use crate::render::Palette;
 
 /// Session files are wrapped in a versioned envelope, so a future format change is
@@ -254,27 +255,4 @@ fn load_jsonl(path: &Path) -> anyhow::Result<(Option<Context>, usize, bool)> {
         count,
         truncated,
     ))
-}
-
-/// Write `contents` to `path` atomically: a temp file beside it, then a rename.
-///
-/// `rename` replaces the destination in a single step on every supported platform, so a
-/// reader never observes a partially written file. The temp file lives in the same
-/// directory as `path`, because a rename across filesystems is not atomic (and on some
-/// platforms not permitted at all).
-fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-
-    std::fs::write(&temp, contents)?;
-    if let Err(error) = std::fs::rename(&temp, path) {
-        // A failed rename must not leave the temp file behind.
-        let _ = std::fs::remove_file(&temp);
-        return Err(error);
-    }
-    Ok(())
 }

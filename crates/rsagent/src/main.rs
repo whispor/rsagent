@@ -7,6 +7,7 @@
 )]
 
 mod config;
+mod fs;
 mod input;
 mod render;
 mod session;
@@ -127,6 +128,8 @@ struct Cli {
     no_bash: bool,
 
     /// List the built-in tools and whether each needs approval, then exit.
+    ///
+    /// Deprecated in favour of `rsagent tools list`; kept working for existing scripts.
     #[arg(long)]
     list_tools: bool,
 
