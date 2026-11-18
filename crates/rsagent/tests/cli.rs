@@ -766,6 +766,95 @@ fn a_session_write_is_atomic_and_leaves_no_temp_file() {
 }
 
 #[test]
+fn a_jsonl_session_is_appended_and_resumed() {
+    // A `.jsonl` session is a header line plus one message per line, appended to across
+    // runs rather than rewritten. The second run must resume it and grow the file.
+    let dir = temp_dir("session-jsonl");
+    let session = dir.join("work.jsonl");
+
+    let first = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "one", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+    assert!(first.status.success(), "exit status: {:?}", first.status);
+
+    let text = std::fs::read_to_string(&session).expect("read session");
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert!(
+        lines[0].contains("\"type\":\"header\""),
+        "the first line is the header: {}",
+        lines[0]
+    );
+    assert!(lines.len() >= 3, "expected a header and messages: {text}");
+    for line in &lines[1..] {
+        let value: serde_json::Value = serde_json::from_str(line).expect("a message line is JSON");
+        assert!(
+            value.get("role").is_some(),
+            "message line has a role: {line}"
+        );
+    }
+
+    let second = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "two", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+    assert!(second.status.success(), "exit status: {:?}", second.status);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(stderr.contains("resumed"), "stderr: {stderr}");
+
+    let after = std::fs::read_to_string(&session).expect("read session");
+    let grown = after.lines().filter(|line| !line.trim().is_empty()).count();
+    assert!(
+        grown > lines.len(),
+        "the JSONL session should have grown: {after}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_truncated_jsonl_tail_is_tolerated() {
+    // A crash can leave a half-written last line. Loading must keep the valid messages
+    // before it, and the next save must rewrite (not append) so the bad bytes are gone.
+    let dir = temp_dir("session-jsonl-truncated");
+    let session = dir.join("work.jsonl");
+    let text = concat!(
+        "{\"type\":\"header\",\"version\":1,\"systemPrompt\":\"saved\"}\n",
+        "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"timestamp\":1}\n",
+        "{\"role\":\"assistant\",\"content\":[{\"type\":\"te"
+    );
+    std::fs::write(&session, text).expect("write session");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["--faux", "--print", "next", "--session"])
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("resumed 1 message(s)"), "stderr: {stderr}");
+    assert!(!stderr.contains("could not read"), "stderr: {stderr}");
+
+    // Every line is now well-formed JSON: the truncated tail was cleaned up by the rewrite.
+    let after = std::fs::read_to_string(&session).expect("read session");
+    for line in after.lines().filter(|line| !line.trim().is_empty()) {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|error| panic!("line is not JSON: {line:?} ({error})"));
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn a_versioned_session_is_resumed() {
     let dir = temp_dir("session-resume");
     let session = dir.join("work.json");

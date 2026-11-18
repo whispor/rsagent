@@ -181,37 +181,18 @@ async fn main() -> anyhow::Result<()> {
     agent.subscribe(tx);
 
     // `--session` names a file explicitly; `--continue` falls back to the default one.
-    let session_path = cli.session.clone().or_else(|| {
-        cli.continue_
-            .then(|| PathBuf::from(session::DEFAULT_SESSION_FILE))
-    });
+    let mut session = cli
+        .session
+        .clone()
+        .or_else(|| {
+            cli.continue_
+                .then(|| PathBuf::from(session::DEFAULT_SESSION_FILE))
+        })
+        .map(|path| session::Session::open(&path));
 
     // Resume a persisted transcript, if one exists.
-    if let Some(path) = &session_path {
-        match session::load(path) {
-            Ok(Some(context)) => {
-                let count = context.messages.len();
-                agent.load_messages(context.messages);
-                // The saved system prompt wins unless the user passed `--system`.
-                if cli.system.is_none() {
-                    if let Some(prompt) = context.system_prompt {
-                        agent.set_system_prompt(prompt);
-                    }
-                }
-                eprintln!(
-                    "{}",
-                    palette.dim(&format!(
-                        "· resumed {count} message(s) from {}",
-                        path.display()
-                    ))
-                );
-            }
-            Ok(None) => {}
-            Err(err) => eprintln!(
-                "{}",
-                palette.yellow(&format!("· could not read {}: {err}", path.display()))
-            ),
-        }
+    if let Some(session) = &mut session {
+        resume_session(session, &mut agent, &cli, palette);
     }
 
     // A one-shot `--print` run keeps stdout to the answer alone; the REPL interleaves.
@@ -232,7 +213,9 @@ async fn main() -> anyhow::Result<()> {
             ))]);
         }
         run_prompt(&mut agent, &mut rx, &mut renderer, prompt).await?;
-        session::save(session_path.as_deref(), &agent, palette);
+        if let Some(session) = &mut session {
+            session.save(&agent, palette);
+        }
         // A model-level failure (bad key, network error, provider refusal) ends the
         // run "successfully" as far as the loop is concerned. In one-shot `--print`
         // mode that must still be visible to scripts and CI, so exit non-zero; the
@@ -257,9 +240,40 @@ async fn main() -> anyhow::Result<()> {
         &mut renderer,
         faux_handle.as_ref(),
         &input,
-        session_path.as_deref(),
+        session.as_mut(),
     )
     .await
+}
+
+/// Load a persisted transcript into the agent, reporting what happened.
+fn resume_session(session: &mut session::Session, agent: &mut Agent, cli: &Cli, palette: Palette) {
+    match session.load() {
+        Ok(Some(context)) => {
+            let count = context.messages.len();
+            agent.load_messages(context.messages);
+            // The saved system prompt wins unless the user passed `--system`.
+            if cli.system.is_none() {
+                if let Some(prompt) = context.system_prompt {
+                    agent.set_system_prompt(prompt);
+                }
+            }
+            eprintln!(
+                "{}",
+                palette.dim(&format!(
+                    "· resumed {count} message(s) from {}",
+                    session.path().display()
+                ))
+            );
+        }
+        Ok(None) => {}
+        Err(err) => eprintln!(
+            "{}",
+            palette.yellow(&format!(
+                "· could not read {}: {err}",
+                session.path().display()
+            ))
+        ),
+    }
 }
 
 /// Build the model registry, the agent, and (in `--faux` mode) the scripted provider.
@@ -640,7 +654,7 @@ async fn run_repl(
     renderer: &mut Renderer,
     faux: Option<&FauxProvider>,
     input: &InputHandle,
-    session_path: Option<&Path>,
+    mut session: Option<&mut session::Session>,
 ) -> anyhow::Result<()> {
     loop {
         let Some(line) = input.read_prompt("> ").await? else {
@@ -660,7 +674,9 @@ async fn run_repl(
                 "clear" => {
                     let dropped = agent.messages().len();
                     agent.load_messages(Vec::new());
-                    session::save(session_path, agent, renderer.palette);
+                    if let Some(session) = session.as_deref_mut() {
+                        session.save(agent, renderer.palette);
+                    }
                     println!(
                         "{}",
                         renderer
@@ -686,7 +702,9 @@ async fn run_repl(
         }
 
         run_prompt(agent, rx, renderer, input_text.to_string()).await?;
-        session::save(session_path, agent, renderer.palette);
+        if let Some(session) = session.as_deref_mut() {
+            session.save(agent, renderer.palette);
+        }
     }
 
     Ok(())
