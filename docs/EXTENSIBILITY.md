@@ -259,12 +259,11 @@ required = ["city"]
       失败 → 回到 unhealthy，冷却翻倍（上限 10min）
 ```
 
-**实现状态（P1）：** 状态机本身已实现（`crates/rsagent-agent/src/breaker.rs`：
+**实现状态（P1 → P3）：** 状态机本身已实现（`crates/rsagent-agent/src/breaker.rs`：
 Closed / Open / HalfOpen、连续失败计数、冷却翻倍且有上限、半开只放行一次探测）。
-`LocalSource::health()` 会据此报告 `Unhealthy`，`LocalTool::execute()` 在熔断打开时
-直接拒绝调用。**尚未实现的两点**（留到 P3 的 `doctor`）：运行时把工具从装配好的列表
-里摘除、以及 `AgentEvent::SourceUnhealthy` 事件——因为当前没有消费者，写了就是"没有
-调用者的代码"（北极星①）。
+每个来源持有自己的熔断器，`health()` 据此报告 `Unhealthy`，工具的 `execute()` 在熔断
+打开时直接拒绝调用。P3 补齐了原先留空的两点：**可观测 / 可重置**与
+**`AgentEvent::SourceUnhealthy` 事件**，见下。
 
 要点：
 
@@ -272,19 +271,41 @@ Closed / Open / HalfOpen、连续失败计数、冷却翻倍且有上限、半�
   （工具正常返回 `Err` 说明它在工作）。这条区分不做，一个总是报错的工具会把自己的来源
   熔断掉，反而掩盖问题。**已实现**：`LocalTool::execute()` 只在"无法启动 / 超时 /
   非零退出 / 输出非 JSON"时 `record_failure`，合法的 `{"error": ...}` 回复只算业务失败。
-- 熔断器状态 MUST 可通过 `rsagent tools`（§3.6）查询与手动重置。**待 P3。**
+- 熔断器状态 MUST 可通过 `rsagent tools`（§3.6）查询与手动重置。**已实现**，见下。
 - 实现上复用 `rsagent-ai/src/providers/http.rs` 里 `send_with_retry` / `is_retryable_status`
   的分类思路：**先分清"可重试"与"不可重试"，再谈重试与熔断。**
+
+**可观测 / 可重置（P3，`crates/rsagent/src/breakers.rs`）：**
+
+- 熔断器活在内存里、随进程消亡。`BreakerReport` 把状态快照为**墙钟秒**
+  （`state` / `failures` / `opened_at_unix` / `cooldown_secs`）——单调的 `Instant`
+  跨进程没有意义，只有墙钟时间才能在下次启动时还原。
+- CLI 每次运行结束都把各来源的熔断状态写入工作目录下的 `.rsagent-breakers.json`
+  （`fs::write_atomic`，原子写；无熔断时删除该文件），下次启动 `restore_breaker()`
+  seed 回去。于是"上一个进程里冷却中的来源"在下一个进程里仍然被排除。
+- `rsagent tools list` / `doctor` 会先 seed 再展示，因此能直接看到 `circuit open`
+  之类的健康原因与持久化快照；`rsagent tools reset [id]` 清除快照（省略 `id` 清全部），
+  使一个仍在冷却的来源立即可被重试。命令是幂等的：重置一个本就无熔断状态的来源
+  （如 `builtin`）只提示"没有熔断状态"，不报错。
+- `AgentEvent::SourceUnhealthy { source_id, kind, reason }`：`Agent::with_health_probe`
+  接受一个**不透明的探针闭包**，每轮轮询一次，仅在来源**转入**不健康时发一次事件
+  （恢复后再次故障会再报）。探针是闭包、事件只是数据，因此**循环依旧不知道"来源"存在**
+  （决策 D2）——这正是 D2 想要的效果。
+
+**仍未实现（刻意延后）：** 运行时把工具从**装配好的列表**里摘除。当前做法是"熔断打开时
+拒绝调用"，对模型与用户的效果等同（该来源的工具即不可用），却不需要循环感知来源，
+也无需重建工具列表。等出现真实需求（如 `tools list` 要实时反映摘除）再补。
 
 ### 3.6 安装 / 卸载 / 体检 · Install, uninstall, doctor ✅
 
 CLI 只加一个子命令组，避免参数爆炸：
 
 ```bash
-rsagent tools list            # 每个来源、每个工具、健康状态
+rsagent tools list            # 每个来源、每个工具、健康状态（含持久化的熔断状态）
 rsagent tools doctor          # 逐个来源做一次探测，报告问题与修复建议
 rsagent tools add <source>    # 把一行 `[[tools.sources]]` 写进 rsagent.toml
 rsagent tools remove <id>     # 从 rsagent.toml 移除并调用 uninstall()
+rsagent tools reset [id]      # 清除持久化的熔断状态（省略 id 清全部），见 §3.5
 ```
 
 **安装/卸载的语义 MUST 是"改配置 + 幂等的准备动作"**，MUST NOT 在卸载时删除用户数据。
@@ -378,7 +399,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
 | 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
-| 子命令结构 | `tools` / `mcp` / `config` 分组 | ✅ 已支持：`rsagent tools list / doctor / add / remove`（§3.6） | **SHOULD 分组**（§3.6） |
+| 子命令结构 | `tools` / `mcp` / `config` 分组 | ✅ 已支持：`rsagent tools list / doctor / add / remove / reset`（§3.6） | **SHOULD 分组**（§3.6） |
 
 ---
 
@@ -424,6 +445,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | P3-2 | ✅ 会话文件原子写（§4.2 陷阱 3） |
 | P3-3 | ✅ `STABILITY.md` + MSRV 声明（§5） |
 | P3-4 | ✅ 会话 JSONL 追加模式（§5） |
+| P3-5 | ✅ 熔断器可观测 / 可重置 + `AgentEvent::SourceUnhealthy`（§3.5） |
 
 **P1 是分水岭**：P0 只加检查与文档，P1 才真正引入新抽象。P1 的每一项都应单独提交，
 便于逐项评审其对北极星①的代价。
@@ -447,6 +469,8 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D9 | `web` 来源把"收到任意 HTTP 响应"判为**业务**失败，只有 transport 错误才熔断 | 与子进程来源"非零退出即连接类"不同：HTTP 一旦应答就证明端点可达；若把 4xx 也算连接类，模型传错参数（400）就会熔断掉整个来源 |
 | D10 | `--json` 直接给事件类型 `derive(Serialize)`（内部标签 `type` + camelCase），而非手写映射 | 手写映射会与枚举定义漂移（加一个变体就漏一个），违背⑤；复用 `ContentBlock`/`Message` 已有的 `type` 标签约定，嵌套事件自然拼成同一种形状，也最省代码（①）。事件类型本就只含字符串/数字/已可序列化的消息，序列化不会失败 |
 | D11 | `tools add` / `remove` 用 `toml_edit` **原地编辑**配置，而非 `toml` 反序列化后整体重写 | 反序列化 + 重写会把用户手写的注释、空行、字段顺序全部抹掉——一次 `add` 就把可读的配置"洗"成机器风格，用户不再敢手改。`toml_edit` 只动目标那一处，其余字节原样保留。代价是多一个依赖，但配置文件的"可手改"本身就是本项目的一条隐性契约（③④） |
+| D12 | 熔断器状态用**墙钟秒**的 `BreakerReport` 持久化，而非直接存 `Instant` | `Instant` 是单调时钟，跨进程无意义：新进程读到的 `Instant` 无法与"现在"比较，还原出的冷却剩余时间必然错误。改用 `opened_at_unix`（Unix 秒）+ `cooldown_secs`，`restore()` 在启动时用当前墙钟反推，于是"上个进程里冷却中的来源"能被正确地继续排除 |
+| D13 | 健康探针是**不透明闭包**（`HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource>>`），而非让 `Agent` 持有 `ToolSource` | 一旦循环持有来源，它就要理解"连接失败/超时/熔断"等来源专有状态，D2 的隔离随之瓦解。闭包把来源健康降维成纯数据（id/kind/reason），循环只负责"对比上一轮、发一次事件"。CLI 侧用 `Arc<[SourceEntry]>` 同时供探针轮询与运行后的快照，避免复制来源 |
 
 ---
 

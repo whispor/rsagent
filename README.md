@@ -208,6 +208,7 @@ rsagent tools list                     # sources, health, and the assembled tool
 rsagent tools doctor                   # probe every source; non-zero exit on failure
 rsagent tools add weather --kind web --url https://example.com/api --name get_weather
 rsagent tools remove weather
+rsagent tools reset weather            # clear persisted circuit-breaker state
 ```
 
 `add` / `remove` edit the file **in place**, preserving comments and formatting
@@ -218,6 +219,12 @@ reported, not rolled back), and `remove` only drops the entry and calls the sour
 uninstall hook. **Neither ever deletes your data.** `add` refuses a duplicate `id`
 rather than overwriting it. `doctor` is a usable CI gate: it exits non-zero if any source
 fails to load, printing a kind-specific fix hint.
+
+Each source guards itself with a circuit breaker (see `docs/EXTENSIBILITY.md` §3.5). Its
+state is snapshotted to `.rsagent-breakers.json` in the working directory after every run
+and restored on the next, so a source that was cooling down stays out of rotation.
+`rsagent tools list` / `doctor` show that state, and `rsagent tools reset [id]` clears it
+(omit `id` to clear all) so a cooling-down source is retried at once.
 
 #### The `local` source protocol (version 1)
 
@@ -388,6 +395,7 @@ source out of the tool list (see decision D9).
 | `rsagent tools doctor` | Probe each source and report problems with a fix hint; non-zero exit on failure. |
 | `rsagent tools add <id> --kind <KIND> [fields]` | Append a `[[tools.sources]]` entry to `rsagent.toml`. |
 | `rsagent tools remove <id>` | Remove a source's entry from `rsagent.toml`. |
+| `rsagent tools reset [id]` | Clear persisted circuit-breaker state (all sources when `id` is omitted). |
 
 Run `rsagent tools add --help` for the per-kind fields (`--url`, `--command`, `--path`,
 `--args`, `--prefix`, …).

@@ -269,10 +269,11 @@ If you are learning the codebase, read in this order — it follows the data flo
 9. `rsagent-agent/src/agent.rs` — **the loop** (`run_turns`); the heart of the project.
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` parses the config file, `tools.rs` implements the
-    `tools` subcommands, and `session.rs` + `fs.rs` persist and atomically write sessions.
+    `tools` subcommands, `breakers.rs` persists circuit-breaker state across runs, and
+    `session.rs` + `fs.rs` persist and atomically write sessions.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 186 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 199 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 186 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 199 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。
