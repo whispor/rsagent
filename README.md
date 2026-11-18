@@ -438,6 +438,19 @@ The file is a versioned envelope (`{"version":1,"context":{...}}`), so an older 
 recognizes — and refuses rather than misreads — a file written by a newer one. Files
 in the original bare-`Context` format are still read.
 
+Name the file with a `.jsonl` extension for **append-mode** sessions, which suit long
+transcripts: the file is a header line followed by one message per line, and each run
+appends only the new messages instead of rewriting the whole file. It resumes the same
+way, and a half-written last line (from a crash mid-append) is dropped on load.
+
+```bash
+rsagent --session work.jsonl --print "read Cargo.toml"   # header + 2 message lines
+rsagent --session work.jsonl --print "now summarize it"  # appends 2 more lines
+```
+
+All session writes are atomic (a temp file plus a rename), so a crash or a concurrent
+run never leaves half a document behind.
+
 ## Exit codes
 
 In `--print` mode the process exits non-zero when the run did not produce a usable

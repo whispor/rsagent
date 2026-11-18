@@ -270,8 +270,8 @@ If you are learning the codebase, read in this order — it follows the data flo
 10. `rsagent/src/main.rs` — how the CLI wires it all together, plus `AGENTS.md` and
     `rsagent.toml` handling; `config.rs` parses the config file.
 
-Two shortcuts for orientation: `cargo test --workspace` runs 176 tests that read like
+Two shortcuts for orientation: `cargo test --workspace` runs 178 tests that read like
 usage examples, and `--list-tools` prints the sources and the assembled tool set at runtime.
 
-两个定位捷径：`cargo test --workspace` 有 176 个测试，读起来就像用例；`--list-tools`
+两个定位捷径：`cargo test --workspace` 有 178 个测试，读起来就像用例；`--list-tools`
 可在运行时打印工具来源与装配后的工具清单。

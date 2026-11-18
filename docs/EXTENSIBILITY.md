@@ -363,7 +363,7 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 配置优先级 | CLI > env > project > user | ✅ 已实现前三档并文档化（`rsagent.toml`，README） | **MUST 文档化**（§3.3） |
 | 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
 | 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
-| 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 |
+| 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封；`.jsonl` 后缀启用 JSONL 追加模式 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 ✅ |
 | 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
 | 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
@@ -412,7 +412,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | P3-1 | `rsagent tools list / doctor / add / remove`（§3.6） |
 | P3-2 | ✅ 会话文件原子写（§4.2 陷阱 3） |
 | P3-3 | ✅ `STABILITY.md` + MSRV 声明（§5） |
-| P3-4 | 会话 JSONL 追加模式（§5） |
+| P3-4 | ✅ 会话 JSONL 追加模式（§5） |
 
 **P1 是分水岭**：P0 只加检查与文档，P1 才真正引入新抽象。P1 的每一项都应单独提交，
 便于逐项评审其对北极星①的代价。
