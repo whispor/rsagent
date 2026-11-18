@@ -43,7 +43,7 @@ Grounded in the tree at the time of writing. · 以下是写作时的真实状�
 | 工具注册 | `Agent::with_tools(Vec<Box<dyn Tool>>)` 仍是唯一入口；`ToolCatalog` 在装配期把来源展开成该扁平列表 | — |
 | 工具来源 | ✅ `ToolSource` trait + `ToolCatalog`（`source.rs` / `catalog.rs`）；`BuiltinSource` / `LocalSource` / `McpStdioSource` / `McpHttpSource` / `SkillSource` / `WebSource`（`sources/`）六种实现 | — |
 | 提供商 | `Provider` trait + `Models::register`（`rsagent-ai/src/provider.rs`） | — |
-| 审批 | `Approver` trait + `Agent::with_approver` | 语义未文档化（默认 `AllowAll`） |
+| 审批 | ✅ `Approver` trait + `Agent::with_approver`；CLI `CliApprover`（`--yes` / 交互 `y`·`a`·回车 / 非交互默认拒绝） | 决策语义已文档化（README「审批」节 + `approval.rs`）；工具按布尔 `requires_approval` 标注，尚未按类别分级 |
 | 路径安全 | `PathFence`（`WorkingDirectory` / `Unrestricted`） | — |
 | 平台差异 | ✅ 收敛到 `platform.rs`（工作区唯一 `#[cfg]`） | — |
 | CI | ✅ 三平台矩阵（ubuntu / windows / macos） | — |
@@ -115,8 +115,11 @@ These hold for every change, forever. · 以下每条对所有改动永久有效
 5. **工具名 MUST 全局唯一且为 `snake_case`。** 模型靠名字调用，重名即歧义。
 6. **工具的参数 schema MUST 是 JSON object schema**，且 `required` 里的键 MUST 在 `properties` 中声明。
 7. **公开 API MUST 有文档注释**；返回 `Result` 的 MUST 有 `# Errors` 段（`missing_errors_doc` 已开）。
-8. **模型级失败 MUST NOT 变成 `Result::Err`。** 缺密钥、网络失败记在 `Agent::error_message()`，
-   `prompt()` 仍返回 `Ok(())`——这是第 4 节"两条通道"的语义（见 `docs/ARCHITECTURE.md` §4）。
+8. **模型级失败 MUST 以 `Err(AgentError::ModelFailed { message })` 结束运行**，并同时在
+   `Agent::error_message()` 与错误事件里给出原因——这是"两条通道"的语义（见
+   `docs/ARCHITECTURE.md` §4）：调用方写 `prompt(..).await?` 不会漏判，只渲染事件的 UI
+   也照样看得到。**用户主动中止不是失败，MUST 仍以 `Ok(())` 结束。** 一次性 `--print`
+   据此以非零码退出；交互式 REPL 吞掉该错误、保持会话不中断。
 9. **不得为单一调用方引入抽象。** 抽象 MUST 至少有两个真实使用者（rule of two）。
 10. **不得新增 `unsafe`。** 目前全仓库零 `unsafe`，这是特性，不是巧合。
 
@@ -148,6 +151,10 @@ pub trait ToolSource: Send + Sync {
     fn tools(&self) -> Vec<Box<dyn Tool>>;
     /// Current health. Defaults to `Healthy` for sources that cannot fail to load.
     fn health(&self) -> SourceHealth { SourceHealth::Healthy }
+    /// This source's circuit-breaker state, if it has one. Default: none.
+    fn breaker_report(&self) -> Option<BreakerReport> { None }
+    /// Rebuild the breaker from a persisted report. Default: nothing to do.
+    fn restore_breaker(&self, _report: &BreakerReport) {}
     /// Install anything this source needs (e.g. an MCP server). Default: nothing to do.
     fn install(&self) -> Result<(), String> { Ok(()) }
     /// Undo `install`. Default: nothing to do.
@@ -396,9 +403,9 @@ Compared against Claude Code, Codex CLI, aider, and opencode. · 对照结论如
 | 项目指令文件 | `AGENTS.md`（事实标准，多产品通用） | ✅ 已支持：启动时读取工作目录向上的最近 `AGENTS.md`，并入 system prompt（`--system` 优先） | **MUST 支持**：启动时读取 `AGENTS.md`，内容并入 system prompt |
 | 配置优先级 | CLI > env > project > user | ✅ 四档已实现并文档化：用户级 + 项目级 `rsagent.toml` 分层合并（`config::load_layered`，README） | **MUST 文档化**（§3.3） |
 | 机器可读输出 | `--json` / `--output-format` | ✅ 已支持：`--json`（配合 `--print`）把事件流按 JSON Lines 输出到 stdout；`--log <FILE>` 在任意模式下追加同形 JSONL 追踪 | **SHOULD 支持**：`--json` 输出事件流，供 CI/脚本消费 |
-| 权限模型 | 按工具类别分级 + 白/黑名单 | `Approver` + `PathFence`，语义未文档化 | **MUST 文档化**；工具按 `read` / `write` / `exec` / `network` 归类 |
+| 权限模型 | 按工具类别分级 + 白/黑名单 | ✅ 已文档化：`Approver` 决策语义（README「审批」节，`y`/`a`/回车 三种答复）+ `PathFence` 工作目录围栏；工具按布尔 `requires_approval` 标注 | **SHOULD 扩展**：细粒度到 `read` / `write` / `exec` / `network` 类别分级（当前为逐工具布尔） |
 | 会话持久化 | JSONL 追加式，可 resume | 版本化 JSON 信封；`.jsonl` 后缀启用 JSONL 追加模式 | 保持；**SHOULD 增加 JSONL 追加模式**以便长会话 ✅ |
-| 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.88 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
+| 稳定性承诺 | semver + 弃用周期 | ✅ 已支持：`STABILITY.md` 列出公开 API 与版本/弃用策略；`Cargo.toml` 声明 MSRV 1.95，CI 有独立任务在 1.95 上构建校验 | **MUST 增加**：`STABILITY.md` 列公开 API，破坏性变更走 minor+弃用期 |
 | 遥测 | 默认关或显式选择加入 | ✅ 已声明：README + `STABILITY.md` 写明"不收集任何遥测" | **MUST 声明**：README 写明"不收集任何遥测" |
 | 非交互模式 | `-p` / `--print` + 退出码 | 已有 | 保持（已实现退出码语义） |
 | 子命令结构 | `tools` / `mcp` / `config` 分组 | ✅ 已支持：`rsagent tools list / doctor / add / remove / reset`（§3.6） | **SHOULD 分组**（§3.6） |

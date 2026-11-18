@@ -935,7 +935,52 @@ fn to_tokens(chars: usize) -> u64 {
     u64::try_from(chars / 4).unwrap_or(u64::MAX)
 }
 
-/// The serialized size of one message, in characters.
+/// A cheap size estimate for one message, in characters.
+///
+/// The trimming decision only needs a rough magnitude, so this sums the length of the
+/// strings a message actually carries instead of serializing it to JSON. Serializing was
+/// the dominant per-turn cost: [`compact_context`](Agent::compact_context) measures the
+/// whole transcript every turn, even when it is far under budget.
 fn message_chars(message: &Message) -> usize {
-    serde_json::to_string(message).map_or(0, |json| json.chars().count())
+    /// The size of one content block, in characters.
+    fn block_chars(block: &ContentBlock) -> usize {
+        match block {
+            ContentBlock::Text { text } => text.chars().count(),
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => thinking.chars().count() + signature.as_ref().map_or(0, |sig| sig.chars().count()),
+            ContentBlock::Image { data, mime_type } => {
+                data.chars().count() + mime_type.chars().count()
+            }
+            // Tool-call arguments are small next to the text blocks, so a `to_string` here
+            // stays cheap and keeps the estimate honest for argument-heavy calls.
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments,
+            } => id.chars().count() + name.chars().count() + arguments.to_string().chars().count(),
+            // `ContentBlock` is `#[non_exhaustive]`.
+            _ => 0,
+        }
+    }
+
+    let content: usize = match message {
+        Message::System(message) => message.content.iter().map(block_chars).sum(),
+        Message::User(message) => message.content.iter().map(block_chars).sum(),
+        Message::Assistant(message) => {
+            message.content.iter().map(block_chars).sum::<usize>()
+                + message
+                    .error_message
+                    .as_ref()
+                    .map_or(0, |text| text.chars().count())
+        }
+        Message::ToolResult(message) => {
+            message.content.iter().map(block_chars).sum::<usize>()
+                + message.tool_name.chars().count()
+        }
+        // `Message` is `#[non_exhaustive]`.
+        _ => 0,
+    };
+    content
 }

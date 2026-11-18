@@ -118,18 +118,23 @@ The loop reports itself over **two independent channels**:
   **过程叙事**：回合开始、文本流式输出、工具执行、需要审批、上下文被裁剪。
 
 This split is why the same `Agent` can drive a rich TUI, a plain CLI, or a headless
-script without changing the core. Note a subtlety: a *model-level* failure (bad key,
-network error) is **not** a `Result::Err` — it is a normal end of the run with the
-reason recorded in `Agent::error_message()`. The CLI turns that into a non-zero exit
-code for `--print` runs. `--json` is the headless consumer in practice: it serializes
-this same event stream (each `AgentEvent` is `Serialize`, as an internally tagged object)
-to stdout, one JSON object per line.
+script without changing the core. A *model-level* failure (bad key, network error,
+provider refusal) is reported on **both** channels: it ends the run with
+`Err(AgentError::ModelFailed { message })`, and the same reason is also recorded in
+`Agent::error_message()` and streamed as an error event. So a caller writing
+`prompt(..).await?` cannot mistake a failed run for a successful one, while a UI that
+only renders events still shows the reason. A user-initiated abort is *not* an error —
+it ends the run with `Ok(())`. `--json` is the headless consumer in practice: it
+serializes this same event stream (each `AgentEvent` is `Serialize`, as an internally
+tagged object) to stdout, one JSON object per line.
 
 正是这一拆分，让同一个 `Agent` 能驱动富终端 UI、朴素 CLI 或无头脚本而无需改动内核。
-一个细节：**模型级**失败（密钥错误、网络故障）**不是** `Result::Err`，而是一次正常
-结束、原因记在 `Agent::error_message()` 里；CLI 会据此让 `--print` 以非零码退出。
-`--json` 正是无头消费方的落地：它把这条事件流（每个 `AgentEvent` 都是 `Serialize`，
-内部标签对象）按行序列化到 stdout，每行一个 JSON 对象。
+**模型级**失败（密钥错误、网络故障、提供商拒绝）会在**两条通道**上同时出现：它以
+`Err(AgentError::ModelFailed { message })` 结束本次运行，同一原因也记入
+`Agent::error_message()` 并作为错误事件流出。于是写 `prompt(..).await?` 的调用方不会
+把失败误当成功，而只渲染事件的 UI 也照样能看到原因。用户主动中止**不是**错误——它以
+`Ok(())` 结束。`--json` 正是无头消费方的落地：它把这条事件流（每个 `AgentEvent` 都是
+`Serialize`，内部标签对象）按行序列化到 stdout，每行一个 JSON 对象。
 
 ---
 

@@ -5,8 +5,16 @@
 //! identical. That common skeleton lives here so the two providers stay small
 //! and a third one is trivial to add.
 
+use std::time::Duration;
+
 use crate::provider::Auth;
 use crate::types::Model;
+
+/// How long to wait for a TCP connection to the provider before giving up.
+///
+/// Only the *connect* phase is bounded; a request that has already connected is left
+/// alone, because streaming responses are long-lived and must not be cut off mid-stream.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Identity, model catalog, and key/base-URL resolution for a provider.
 #[derive(Debug)]
@@ -16,8 +24,10 @@ pub(super) struct ProviderCore {
     env_keys: Vec<String>,
     base_url_override: Option<String>,
     /// One HTTP client per provider, so its connection pool is reused across requests
-    /// instead of rebuilt on every call. Deliberately built with no request timeout:
-    /// streaming responses are long-lived and must not be cut off mid-stream.
+    /// instead of rebuilt on every call. Deliberately built with no *request* timeout:
+    /// streaming responses are long-lived and must not be cut off mid-stream. A short
+    /// *connect* timeout is set instead, so a server that accepts TCP but never answers
+    /// cannot hang a turn forever.
     client: reqwest::Client,
 }
 
@@ -29,7 +39,12 @@ impl ProviderCore {
             models,
             env_keys,
             base_url_override: None,
-            client: reqwest::Client::new(),
+            // A builder with only a connect timeout cannot fail to build; fall back to the
+            // default client rather than panicking if it ever does.
+            client: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .unwrap_or_default(),
         }
     }
 

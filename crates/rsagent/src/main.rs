@@ -24,8 +24,8 @@ use clap::Parser;
 use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentError, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource,
-    McpHttpSource, McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, Tool,
-    ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
+    McpHttpSource, McpStdioSource, PathFence, SkillSource, SourceEntry, SourceHealth, SourceKind,
+    Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
@@ -648,9 +648,15 @@ async fn build_source(
     spec: &SourceConfig,
     palette: Palette,
 ) -> Result<Box<dyn rsagent_agent::ToolSource>, String> {
-    match spec.kind.as_str() {
-        "builtin" => Ok(Box::new(builtin_source(cli, Some(spec), palette))),
-        "local" => {
+    // Resolve the kind through the enum, so the accepted names live in exactly one place
+    // (`SourceKind::ALL`) instead of being repeated as string literals here.
+    let Some(kind) = SourceKind::parse(&spec.kind) else {
+        return Err(unknown_kind(&spec.kind));
+    };
+
+    match kind {
+        SourceKind::Builtin => Ok(Box::new(builtin_source(cli, Some(spec), palette))),
+        SourceKind::Local => {
             let command = spec
                 .command
                 .as_deref()
@@ -660,7 +666,7 @@ async fn build_source(
                 LocalSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
             Ok(Box::new(source))
         }
-        "mcp-stdio" => {
+        SourceKind::McpStdio => {
             let command = spec
                 .command
                 .as_deref()
@@ -670,7 +676,7 @@ async fn build_source(
                 McpStdioSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
             Ok(Box::new(source))
         }
-        "mcp-http" => {
+        SourceKind::McpHttp => {
             let url = spec
                 .url
                 .as_deref()
@@ -685,7 +691,7 @@ async fn build_source(
             let source = McpHttpSource::new(spec.id.clone(), url, headers, timeout).await?;
             Ok(Box::new(source))
         }
-        "skill" => {
+        SourceKind::Skill => {
             let path = spec
                 .path
                 .as_deref()
@@ -694,7 +700,7 @@ async fn build_source(
             let source = SkillSource::new(spec.id.clone(), path, timeout)?;
             Ok(Box::new(source))
         }
-        "web" => {
+        SourceKind::Web => {
             let url = spec
                 .url
                 .as_deref()
@@ -722,10 +728,16 @@ async fn build_source(
             let source = WebSource::new(spec.id.clone(), config, timeout)?;
             Ok(Box::new(source))
         }
-        other => Err(format!(
-            "unknown source kind `{other}` (expected `builtin`, `local`, `mcp-stdio`, `mcp-http`, `skill`, or `web`)"
-        )),
+        // `SourceKind` is `#[non_exhaustive]`, so a crate outside `rsagent-agent` needs a
+        // catch-all; an unknown kind never reaches here (see `parse` above).
+        _ => Err(unknown_kind(&spec.kind)),
     }
+}
+
+/// The error for a config `kind` that names no known source, listing the known kinds.
+fn unknown_kind(kind: &str) -> String {
+    let known = SourceKind::ALL.map(SourceKind::as_str).join(", ");
+    format!("unknown source kind `{kind}` (expected one of: {known})")
 }
 
 /// The built-in source, with CLI flags layered over the config entry.
@@ -906,6 +918,15 @@ async fn run_prompt(
     let prompt = agent.prompt(input).fuse();
     tokio::pin!(prompt);
 
+    // Register the interrupt handler once, outside the loop: rebuilding `ctrl_c()` on
+    // every event would re-register it each iteration and risk dropping a signal that
+    // arrives between two registrations. The guard stops polling it after it has fired
+    // once — a completed future must not be polled again — which is fine, because one
+    // abort cancels the run and so ends the loop.
+    let interrupt = tokio::signal::ctrl_c();
+    tokio::pin!(interrupt);
+    let mut interrupted = false;
+
     // Hold the outcome rather than propagating it here: a failing run still has events
     // queued (the error itself is one), and they must be rendered before we return.
     let outcome = loop {
@@ -915,7 +936,8 @@ async fn run_prompt(
                 log.append(&event);
                 renderer.render(&event);
             }
-            _ = tokio::signal::ctrl_c() => {
+            _ = &mut interrupt, if !interrupted => {
+                interrupted = true;
                 eprintln!("{}", renderer.palette.yellow("\n· aborting…"));
                 cancel.cancel();
             }

@@ -578,9 +578,10 @@ output and log files stay clean.
 - **No telemetry.** rsagent collects nothing: it sends data only to the model endpoint you
   configure, the tool sources you declare, and `webfetch` targets the model chooses. See
   [STABILITY.md](STABILITY.md).
-- **Minimum supported Rust version: 1.88** (declared as `rust-version` in the workspace
-  `Cargo.toml`). The floor comes from the dependency tree, not from a language feature we
-  use.
+- **Minimum supported Rust version: 1.95** (declared as `rust-version` in the workspace
+  `Cargo.toml`, and checked by a dedicated CI job). The floor comes from the dependency
+  tree — `rustyline` 19's `cfg_select!` macro, stabilized in 1.95 — not from a language
+  feature we use.
 - Two wire protocols are implemented natively: OpenAI Chat Completions and Anthropic
   Messages. Both normalize into the same `StreamEvent` sequence, so the agent loop and
   UI are protocol-agnostic.

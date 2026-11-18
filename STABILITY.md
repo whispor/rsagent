@@ -64,14 +64,20 @@ is therefore **not** a breaking change. · 两个 crate 在可能新增变体处
 
 ## Minimum Supported Rust Version · 最低支持的 Rust 版本
 
-**MSRV: Rust 1.88.** Declared as `rust-version` in the workspace `Cargo.toml` and
-inherited by every crate, so `cargo` itself enforces it. · **MSRV：Rust 1.88**，在
-`Cargo.toml` 的 `[workspace.package]` 声明并由各 crate 继承，`cargo` 会强制检查。
+**MSRV: Rust 1.95.** Declared as `rust-version` in the workspace `Cargo.toml` and
+inherited by every crate, so `cargo` itself enforces it. A dedicated CI job builds the
+whole workspace on 1.95, so the floor is *checked*, not merely asserted. · **MSRV：Rust
+1.95**，在 `Cargo.toml` 的 `[workspace.package]` 声明并由各 crate 继承，`cargo` 会强制检查；
+CI 有独立任务在 1.95 上构建整个 workspace，因此下限是被**校验**的，而非仅声明。
 
-It is set by the dependency floor (`icu_*` via `reqwest` → `url`), not by a language
-feature we use. Raising it is treated as a **minor** change and is announced in the
-changelog. · 它由依赖下限决定（`reqwest` → `url` → `icu_*`），而非我们使用的语言特性；
-提高 MSRV 视为 **minor** 变更并在 changelog 说明。
+It is set by the dependency floor, not by a language feature we use. The binding
+constraint is `rustyline` 19 (the REPL line editor), whose `cfg_select!` macro was
+stabilized in Rust 1.95 (`rust-lang/rust#115585`); everything else, including `icu_*`
+via `reqwest` → `url`, builds on older toolchains. Raising it is treated as a **minor**
+change and is announced in the changelog. · 它由依赖下限决定，而非我们使用的语言特性：
+真正的约束是 `rustyline` 19（REPL 行编辑器）用到的 `cfg_select!` 宏，它在 Rust 1.95 才稳定
+（`rust-lang/rust#115585`）；其余依赖（含 `reqwest` → `url` → `icu_*`）在更旧的工具链上即可
+构建。提高 MSRV 视为 **minor** 变更并在 changelog 说明。
 
 ## Telemetry · 遥测
 

@@ -34,6 +34,20 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    /// Every kind, in the order they are documented.
+    ///
+    /// The single list of "what kinds exist": [`as_str`](Self::as_str) names them,
+    /// [`parse`](Self::parse) resolves a config string against it, and callers build their
+    /// "expected one of …" messages from it — so adding a kind updates one place.
+    pub const ALL: [SourceKind; 6] = [
+        SourceKind::Builtin,
+        SourceKind::Local,
+        SourceKind::McpStdio,
+        SourceKind::McpHttp,
+        SourceKind::Skill,
+        SourceKind::Web,
+    ];
+
     /// The stable name used in `rsagent.toml` and in `doctor` output.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -44,6 +58,13 @@ impl SourceKind {
             SourceKind::Skill => "skill",
             SourceKind::Web => "web",
         }
+    }
+
+    /// Parse a config `kind` string, or `None` when it names no known kind.
+    pub fn parse(name: &str) -> Option<SourceKind> {
+        SourceKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == name)
     }
 }
 

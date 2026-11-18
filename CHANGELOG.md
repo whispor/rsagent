@@ -49,10 +49,18 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   `messages` transcript.** The transcript is available via `Agent::messages`, so cloning
   it into every subscriber — and, with `--log`, onto disk — was pure overhead at the end
   of every run. Update `AgentEnd { messages }` matches to `AgentEnd { message_count }`.
+- **Breaking: MSRV raised from 1.88 to 1.95.** The floor is now set by `rustyline` 19
+  (the REPL line editor), which uses the `cfg_select!` macro stabilized in Rust 1.95
+  (`rust-lang/rust#115585`); every other dependency builds on older toolchains. A new CI
+  job builds the whole workspace on 1.95, so the floor is verified rather than asserted.
+  Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
 - A failing run's error event is now rendered before the process returns. Previously a
   model error could be queued but never printed when the run ended in the same poll.
+- HTTP providers apply a 10-second **connect** timeout, so an unreachable endpoint fails
+  fast instead of hanging the first turn. There is still deliberately no *request*
+  timeout, so long-lived streams are never cut off.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead

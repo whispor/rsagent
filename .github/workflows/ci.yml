@@ -32,3 +32,20 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
+
+  # The declared MSRV is a promise, so build the whole workspace on it. Kept separate
+  # from `check` (which runs on stable) because rustfmt/clippy output is toolchain-
+  # specific; only the plain compiler needs to hold at the floor.
+  # 声明的 MSRV 是一项承诺，因此在它上面构建整个 workspace。与跑 stable 的 `check` 分开，
+  # 因为 rustfmt/clippy 的输出随工具链而变；只有编译器本身需要在最低版本上成立。
+  msrv:
+    name: MSRV (1.95)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+      - name: Check at MSRV
+        run: cargo check --workspace --all-targets --locked

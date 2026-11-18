@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use rsagent_agent::{BreakerState, SourceHealth, ToolSource};
+use rsagent_agent::{BreakerState, SourceHealth, SourceKind, ToolSource};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
 use crate::breakers::BreakerStore;
@@ -254,11 +254,16 @@ fn report(source: &dyn ToolSource, palette: Palette) {
 
 /// A one-line, kind-specific suggestion for fixing a source that will not load.
 fn fix_hint(kind: &str) -> Option<&'static str> {
-    match kind {
-        "local" | "mcp-stdio" => Some("检查 `command` / `args`，并确认该程序能在本机直接运行"),
-        "mcp-http" | "web" => Some("检查 `url`，并确认端点可达（网络与鉴权头）"),
-        "skill" => Some("检查 `path`，并确认该目录含 `SKILL.md` 与 `skill.toml`"),
-        "builtin" => Some("检查 `only` / `exclude` 里的工具名是否拼写正确"),
+    // Resolve through the enum rather than matching raw strings, so the kinds are named
+    // in one place (`SourceKind::ALL`).
+    match SourceKind::parse(kind)? {
+        SourceKind::Local | SourceKind::McpStdio => {
+            Some("检查 `command` / `args`，并确认该程序能在本机直接运行")
+        }
+        SourceKind::McpHttp | SourceKind::Web => Some("检查 `url`，并确认端点可达（网络与鉴权头）"),
+        SourceKind::Skill => Some("检查 `path`，并确认该目录含 `SKILL.md` 与 `skill.toml`"),
+        SourceKind::Builtin => Some("检查 `only` / `exclude` 里的工具名是否拼写正确"),
+        // `SourceKind` is `#[non_exhaustive]`.
         _ => None,
     }
 }
