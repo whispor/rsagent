@@ -44,6 +44,7 @@ use rsagent_ai::ToolSpec;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::approval::Permission;
 use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
@@ -274,6 +275,11 @@ impl Tool for SkillTool {
         self.spec.requires_approval
     }
 
+    /// A skill tool runs its `command` as a subprocess, so it is an `exec` side effect.
+    fn permission(&self) -> Permission {
+        Permission::Exec
+    }
+
     async fn execute(
         &self,
         _call_id: &str,
@@ -500,6 +506,21 @@ mod tests {
     fn a_tool_without_a_command_is_refused() {
         let dir = write_skill("no-command-field", "[[tool]]\nname = \"t\"\n");
         assert!(SkillSource::new("s", &dir, None).is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_skill_tool_is_an_exec_call() {
+        // A skill tool runs its `command` as a subprocess, so it is `exec`, not `network`.
+        use crate::approval::Permission;
+
+        let dir = write_skill(
+            "permission",
+            "[[tool]]\nname = \"t\"\ncommand = \"run.sh\"\n",
+        );
+        let source = SkillSource::new("s", &dir, None).expect("load");
+        assert_eq!(source.tools()[0].permission(), Permission::Exec);
 
         std::fs::remove_dir_all(&dir).ok();
     }

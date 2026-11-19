@@ -39,6 +39,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::process::{Child, ChildStderr, Command};
 use tokio::sync::Mutex;
 
+use crate::approval::Permission;
 use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
@@ -505,6 +506,11 @@ impl Tool for McpTool {
         self.spec.requires_approval
     }
 
+    /// An MCP tool acts through the server (typically remote), so it is a network call.
+    fn permission(&self) -> Permission {
+        Permission::Network
+    }
+
     /// MCP tools share one stdio pipe, so they never run concurrently with others.
     fn is_sequential(&self) -> bool {
         true
@@ -868,5 +874,25 @@ mod tests {
         let mut short = "hello".to_string();
         trim_front_to_limit(&mut short, STDERR_LIMIT);
         assert_eq!(short, "hello");
+    }
+
+    #[tokio::test]
+    async fn an_mcp_stdio_tool_is_a_network_call() {
+        // An MCP tool acts through the server, so it is `network`, never `exec`.
+        use crate::approval::Permission;
+
+        let source = source_over(
+            |message| match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => respond(
+                    message,
+                    json!({ "protocolVersion": "2025-06-18", "capabilities": {} }),
+                ),
+                Some("tools/list") => respond(message, json!({ "tools": [tool_json("echo")] })),
+                _ => None,
+            },
+        )
+        .await;
+
+        assert_eq!(source.tools()[0].permission(), Permission::Network);
     }
 }

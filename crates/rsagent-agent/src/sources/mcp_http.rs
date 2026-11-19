@@ -33,6 +33,7 @@ use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use crate::approval::Permission;
 use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
@@ -456,6 +457,11 @@ impl Tool for McpHttpTool {
 
     fn requires_approval(&self) -> bool {
         self.spec.requires_approval
+    }
+
+    /// An MCP HTTP tool makes a network request, so it is a network call.
+    fn permission(&self) -> Permission {
+        Permission::Network
     }
 
     async fn execute(
@@ -934,5 +940,20 @@ mod tests {
     fn event_payloads_split_events_and_strip_the_data_prefix() {
         let payloads = event_payloads("event: message\ndata: {\"a\":1}\n\ndata: two\n\n");
         assert_eq!(payloads, vec!["{\"a\":1}".to_string(), "two".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_mcp_http_tool_is_a_network_call() {
+        // An MCP HTTP tool makes a network request, so it is `network`, never `exec`.
+        use crate::approval::Permission;
+
+        let source = source_over(|request| match request.method().as_deref() {
+            Some("initialize") => request.reply(json!({ "protocolVersion": "2025-06-18" })),
+            Some("tools/list") => request.reply(json!({ "tools": [tool_json("echo")] })),
+            _ => accepted(),
+        })
+        .await;
+
+        assert_eq!(source.tools()[0].permission(), Permission::Network);
     }
 }

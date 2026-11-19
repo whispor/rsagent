@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
 
+use crate::approval::Permission;
 use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
@@ -253,6 +254,11 @@ impl Tool for WebTool {
         self.spec.requires_approval
     }
 
+    /// A web tool reaches an HTTP endpoint, so it is a network call — never `exec`.
+    fn permission(&self) -> Permission {
+        Permission::Network
+    }
+
     async fn execute(
         &self,
         _call_id: &str,
@@ -346,6 +352,7 @@ fn snippet(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{scalar, snippet, WebSource, WebSourceConfig};
+    use crate::approval::Permission;
     use crate::breaker::BreakerPolicy;
     use crate::source::{SourceHealth, SourceKind, ToolSource};
     use crate::tool::ToolContext;
@@ -699,5 +706,14 @@ mod tests {
             "200 characters plus the ellipsis"
         );
         assert!(short.ends_with('…'));
+    }
+
+    #[test]
+    fn a_web_tool_is_a_network_call() {
+        // A web tool reaches an HTTP endpoint; `--allow network` must be what lets it
+        // through, not `--allow exec` (see ACTIONS.md A1).
+        let source = WebSource::new("api", WebSourceConfig::new("http://127.0.0.1:1/tool"), None)
+            .expect("build the source");
+        assert_eq!(source.tools()[0].permission(), Permission::Network);
     }
 }

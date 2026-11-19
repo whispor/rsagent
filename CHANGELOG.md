@@ -78,6 +78,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **Non-built-in tools now declare their real `Permission` category.** The `web`,
+  `mcp-http`, and `mcp-stdio` tools were falling back to the default `exec` category, so
+  `--allow network` could not let them through while `--allow exec` silently auto-approved
+  authenticated HTTP calls (a permission *widening*, against D15's "most restrictive by
+  default"). They now report `network`; `local` and `skill` correctly stay `exec`. This also
+  makes `rsagent tools list` show the right category.
 - **Anthropic: an `error` event no longer ends as a success.** The parser emitted a
   terminal `Done` after an `error`, and consumers that take the last terminal event read
   the failure as an empty success (exit `0`, no error in the transcript). `finish` now

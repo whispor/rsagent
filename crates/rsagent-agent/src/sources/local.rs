@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use rsagent_ai::ToolSpec;
 use serde_json::{json, Value};
 
+use crate::approval::Permission;
 use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker};
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
@@ -181,6 +182,11 @@ impl Tool for LocalTool {
         self.spec.requires_approval
     }
 
+    /// A local tool runs an opaque subprocess, so it is an `exec` side effect.
+    fn permission(&self) -> Permission {
+        Permission::Exec
+    }
+
     /// Local tools are opaque subprocesses, so they never run concurrently with others.
     fn is_sequential(&self) -> bool {
         true
@@ -326,5 +332,31 @@ mod tests {
     fn describe_rejects_a_tool_without_a_name() {
         let value = json!({ "protocol": 1, "tools": [{ "description": "anonymous" }] });
         assert!(parse_describe(&value).is_err());
+    }
+
+    #[test]
+    fn a_local_tool_is_an_exec_call() {
+        // A local tool runs an opaque subprocess, so it is `exec`, never `network`.
+        use super::{LocalTool, LocalToolSpec};
+        use crate::approval::Permission;
+        use crate::breaker::{BreakerPolicy, CircuitBreaker};
+        use crate::tool::Tool;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let tool = LocalTool {
+            source_id: "local".to_string(),
+            program: "noop".to_string(),
+            args: Vec::new(),
+            timeout: Duration::from_secs(1),
+            spec: LocalToolSpec {
+                name: "t".to_string(),
+                description: String::new(),
+                parameters: json!({}),
+                requires_approval: true,
+            },
+            breaker: Arc::new(CircuitBreaker::new(BreakerPolicy::default())),
+        };
+        assert_eq!(tool.permission(), Permission::Exec);
     }
 }
