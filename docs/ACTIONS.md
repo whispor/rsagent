@@ -251,8 +251,7 @@
 
 #### B1 · MCP JSON-RPC 关联：区分请求方向 + 分页上限
 
-- **状态**：**进行中**（评审方 2026-11-19 17:49 观察到未提交的 WIP；提交后请改为
-  `已完成 (<commit>)` 并补验收证据）
+- **状态**：已完成 (c427a3b)
 - **成本**：约 1.5 天 · **影响**：中高
 - **问题（已验证）**：
   1. `mcp_stdio.rs:222` 与 `mcp_http.rs:283` 只按 `id` 匹配。JSON-RPC 里 **server→client
@@ -272,6 +271,28 @@
   新增测试：mock server 先发一个**同 id 的请求**再发真正的响应 → 断言客户端取到的是响应
   而非请求；`tools/list` 恒定游标 → 断言在有界时间内报错而非挂死。
 - **关联**：M9。
+
+```
+- 状态：已完成 (c427a3b)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 258 通过 / 0 失败（较上轮 +4）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：a_same_id_server_request_is_not_taken_as_the_response（stdio）、
+    a_same_id_server_request_in_the_stream_is_not_the_response（http）、
+    a_constant_cursor_is_refused_rather_than_looping_forever（stdio + http 各一）
+- 实现：
+  - 两份文件各加 `const MAX_TOOL_PAGES: usize = 100;`，`loop` 改 `for _ in 0..MAX_TOOL_PAGES`，
+    无游标 `return Ok(tools)`，耗尽则报错（`… returned more than 100 pages of tools`）。
+  - `mcp_stdio::request()` 与 `mcp_http::find_event_response()`：跳过带 `method` 的消息
+    （请求/通知），继续等真正的响应——同一连接上响应可能在后。
+  - `mcp_http::read_result()`：裸 JSON body 带 `method` → `CallError::Transport` 并报错
+    （body 只有一个对象，无流可继续扫；注释已写明为何归 Transport 而非 Protocol）。
+- 文档同步：CHANGELOG.md（Fixed）、两处模块级文档（Wire format / Session）
+- 未做（评审方标注为可选）：server→client 请求的日志可见性。MCP 传输层当前没有日志通道，
+  为一条「合规服务器不会触发」的路径新引入一个通道，违背北极星①④，故未加。
+```
 
 > **评审方预审（2026-11-19 17:49，针对未提交的 WIP，提交后需重新核实）**
 >
