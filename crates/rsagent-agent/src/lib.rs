@@ -26,7 +26,7 @@ pub use cancel::CancelToken;
 pub use catalog::{CatalogError, SourceEntry, ToolCatalog, PREFIX_SEPARATOR};
 pub use error::AgentError;
 pub use event::AgentEvent;
-pub use memory::{Memory, MemoryEntry, DEFAULT_MEMORY_CAP, DEFAULT_RECALL_LIMIT};
+pub use memory::{Memory, MemoryEntry, DEFAULT_MEMORY_CAP, DEFAULT_RECALL_LIMIT, MAX_NOTE_CHARS};
 pub use source::{SourceHealth, SourceKind, ToolSource, UnhealthySource};
 pub use sources::{
     BuiltinSource, LocalSource, McpHttpSource, McpStdioSource, SkillSource, WebSource,

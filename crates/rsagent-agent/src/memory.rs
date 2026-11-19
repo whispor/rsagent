@@ -11,6 +11,7 @@
 //! exactly that, the same way a JSONL session file does (`session.rs`).
 
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,13 @@ pub const DEFAULT_MEMORY_CAP: usize = 200;
 /// The default number of notes folded into the system prompt and returned by `recall`.
 pub const DEFAULT_RECALL_LIMIT: usize = 20;
 
+/// The longest a single note may be, in characters.
+///
+/// Notes are folded verbatim into the system prompt, so an oversized one — which the model
+/// can write — would crowd the context budget. [`Memory::append`] truncates past this bound,
+/// the same way an oversized tool result is truncated (`agent.rs`).
+pub const MAX_NOTE_CHARS: usize = 2_000;
+
 /// One remembered note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -34,8 +42,9 @@ pub struct MemoryEntry {
 
 /// A durable, append-only store of timestamped notes.
 ///
-/// Cheap to construct and share behind an [`Arc`](std::sync::Arc); the file is read and
-/// written on each call, which suits the small, occasional notes memory holds.
+/// Cheap to construct and share behind an [`Arc`](std::sync::Arc); each call reads the file,
+/// but a normal [`append`](Memory::append) only adds one line rather than rewriting, which
+/// suits the small, occasional notes memory holds.
 #[derive(Debug)]
 pub struct Memory {
     path: PathBuf,
@@ -62,29 +71,34 @@ impl Memory {
 
     /// Append a note, returning the entry that was stored.
     ///
-    /// The text is trimmed; an empty note is rejected rather than stored. When the store
-    /// is already at its cap, the oldest note is dropped to make room.
+    /// The text is trimmed; an empty note is rejected rather than stored, and a note longer
+    /// than [`MAX_NOTE_CHARS`] is truncated. When the store is already at its cap, the oldest
+    /// note is dropped to make room.
+    ///
+    /// The note is written with a single append, not a read-modify-write, so two processes
+    /// sharing one file do not clobber each other; the file is rewritten only when it has
+    /// outgrown the cap.
     ///
     /// # Errors
     ///
-    /// Returns an error when the note is empty, or when the file cannot be read or
-    /// written.
+    /// Returns an error when the note is empty, or when the file cannot be read or written.
     pub fn append(&self, text: &str) -> Result<MemoryEntry, String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("cannot remember an empty note".to_string());
         }
-        let mut entries = self.load()?;
         let entry = MemoryEntry {
             at: unix_now(),
-            text: text.to_string(),
+            text: cap_note(text),
         };
-        entries.push(entry.clone());
+        self.append_line(&entry)?;
+        // A pure append cannot lose a concurrent writer's note, so compact only once the file
+        // has actually outgrown the cap — the common path never rewrites.
+        let entries = self.load()?;
         if entries.len() > self.cap {
-            let excess = entries.len() - self.cap;
-            entries.drain(..excess);
+            let keep = entries.len() - self.cap;
+            self.write(&entries[keep..])?;
         }
-        self.write(&entries)?;
         Ok(entry)
     }
 
@@ -133,14 +147,27 @@ impl Memory {
         }
     }
 
+    /// Append one note as a single JSONL line, creating the parent directory.
+    fn append_line(&self, entry: &MemoryEntry) -> Result<(), String> {
+        self.ensure_parent()?;
+        let mut line = serde_json::to_string(entry)
+            .map_err(|error| format!("cannot encode a memory note: {error}"))?;
+        line.push('\n');
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|error| format!("cannot open {}: {error}", self.path.display()))?;
+        file.write_all(line.as_bytes())
+            .map_err(|error| format!("cannot write {}: {error}", self.path.display()))
+    }
+
     /// Write every note, one JSON object per line, creating the parent directory.
+    ///
+    /// This rewrites the whole file, so it is reserved for compaction — the one place a note
+    /// may legitimately be dropped.
     fn write(&self, entries: &[MemoryEntry]) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-            }
-        }
+        self.ensure_parent()?;
         let mut text = String::new();
         for entry in entries {
             let line = serde_json::to_string(entry)
@@ -151,6 +178,30 @@ impl Memory {
         std::fs::write(&self.path, text.as_bytes())
             .map_err(|error| format!("cannot write {}: {error}", self.path.display()))
     }
+
+    /// Create the note file's parent directory when it has one.
+    fn ensure_parent(&self) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Truncate an oversized note so it cannot crowd the system prompt.
+///
+/// Mirrors how an oversized tool result is truncated (`agent.rs`): keep the head and mark the
+/// cut, so the model can see the note was shortened.
+fn cap_note(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= MAX_NOTE_CHARS {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(MAX_NOTE_CHARS).collect();
+    format!("{kept} … [truncated: showing {MAX_NOTE_CHARS} of {total} characters]")
 }
 
 /// Parse up to `limit` notes from JSONL text, oldest first.
@@ -190,7 +241,7 @@ fn age(now: u64, at: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{age, parse_entries, Memory, MemoryEntry, DEFAULT_RECALL_LIMIT};
+    use super::{age, parse_entries, Memory, MemoryEntry, DEFAULT_RECALL_LIMIT, MAX_NOTE_CHARS};
 
     #[test]
     fn append_then_recent_round_trips() {
@@ -259,6 +310,55 @@ mod tests {
         let rendered = memory.render(DEFAULT_RECALL_LIMIT);
         assert!(rendered.contains("# Memory"));
         assert!(rendered.contains("remember this"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_append_does_not_rewrite_the_file() {
+        let dir =
+            std::env::temp_dir().join(format!("rsagent-memory-append-{}", std::process::id()));
+        let path = dir.join("memory.jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        let memory = Memory::new(&path, 100);
+
+        // A line `load` skips, so a full rewrite would erase it. That it survives proves the
+        // common-path append only appends — the property that keeps concurrent writers safe.
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(&path, "{\"at\":1,\"text\":\"one\"}\nnot-json\n").expect("seed");
+        memory.append("two").expect("append");
+
+        let raw = std::fs::read_to_string(&path).expect("read");
+        assert!(raw.contains("not-json"), "append must not rewrite the file");
+        let entries = memory.recent(100).expect("recent");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_note_longer_than_the_cap_is_truncated() {
+        let dir =
+            std::env::temp_dir().join(format!("rsagent-memory-cap-note-{}", std::process::id()));
+        let path = dir.join("memory.jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        let memory = Memory::new(&path, 10);
+
+        let long = "x".repeat(MAX_NOTE_CHARS + 500);
+        let entry = memory.append(&long).expect("append");
+
+        let prefix = "x".repeat(MAX_NOTE_CHARS);
+        assert!(entry.text.chars().count() < long.chars().count());
+        assert!(entry.text.starts_with(&prefix));
+        assert!(entry.text.contains("[truncated:"));
+
+        // The bounded note is what actually lands on disk.
+        let stored = memory.recent(1).expect("recent");
+        assert_eq!(stored[0].text, entry.text);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
