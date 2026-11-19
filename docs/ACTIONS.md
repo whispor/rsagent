@@ -180,7 +180,7 @@ A3 消除了 Windows 上的必然失败）。
 
 #### A4 · `--print` 下把 thinking 增量从 stdout 移到 stderr
 
-- **状态**：待办
+- **状态**：已完成 (ab178bc)
 - **成本**：约 0.25 天 · **影响**：中（污染重定向输出）
 - **问题**：`--print --thinking high "…" > answer.md` 会把**推理文本**一起写进
   `answer.md`。`--json` 模式已隔离，但 `--print` 的默认渲染没有。
@@ -194,11 +194,23 @@ A3 消除了 Windows 上的必然失败）。
   加一个 CLI 测试断言 stdout 与 stderr 的分工。
 - **关联**：M12。
 
+```
+- 状态：已完成 (ab178bc)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 252 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：print_sends_reasoning_to_stderr_not_stdout
+- 文档同步：CHANGELOG.md / README.md
+- 说明：`--faux --print --thinking <level>` 现在会先输出一个推理块，使该分工可被真实断言。
+```
+
 ---
 
 #### A5 · `tools doctor` 对坏配置 / 不健康来源返回非零
 
-- **状态**：待办
+- **状态**：已完成 (75eb483)
 - **成本**：约 0.25 天 · **影响**：中（CI gate 承诺）
 - **问题**：README 把 `rsagent tools doctor` 描述为「a CI gate」，但它对**配置解析失败**
   和 `SourceHealth::Unhealthy` 的来源仍退 `0`。CI 里它永远绿。
@@ -210,6 +222,20 @@ A3 消除了 Windows 上的必然失败）。
   ```
   加 CLI 测试覆盖「健康 → 0」「不健康 → 1」。
 - **关联**：M13。
+
+```
+- 状态：已完成 (75eb483)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 254 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：tools_doctor_fails_on_a_broken_config、tools_doctor_fails_on_an_unhealthy_source
+- 文档同步：CHANGELOG.md
+- 说明：退出码沿用 `tools` 子命令的既有约定（非零 = 2，经 `tools::run` 的通用错误出口），
+  而非字面 `exit(1)`；README 承诺的只是「non-zero」，`tools list` 的语义未变。
+  `--json` 对 `tools` 子命令不可达（`--json` 非 global 且要求 `--print`），故未加 JSON 汇总。
+```
 
 ---
 
