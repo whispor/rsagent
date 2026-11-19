@@ -309,6 +309,7 @@ fn openai_reasoning_effort(level: ThinkingLevel) -> Option<&'static str> {
 ///
 /// Kept as a standalone struct so its behavior is unit-testable without a network.
 struct OpenAiStreamParser {
+    model: Model,
     partial: AssistantMessage,
     /// openai tool-call index -> accumulated raw argument JSON string.
     tool_arg_buffers: HashMap<usize, String>,
@@ -316,20 +317,44 @@ struct OpenAiStreamParser {
     tool_content_index: HashMap<usize, usize>,
     finish_reason: Option<String>,
     usage: Usage,
+    /// Set once a mid-stream `error` object arrives, so `finish` does not emit a success
+    /// `Done` and nothing after the error is read.
+    failed: bool,
 }
 
 impl OpenAiStreamParser {
     fn new(model: &Model) -> Self {
         OpenAiStreamParser {
+            model: model.clone(),
             partial: AssistantMessage::partial(model),
             tool_arg_buffers: HashMap::new(),
             tool_content_index: HashMap::new(),
             finish_reason: None,
             usage: Usage::default(),
+            failed: false,
         }
     }
 
     fn handle_chunk(&mut self, value: &Value) -> Vec<StreamEvent> {
+        // A failed stream already yielded its terminal `Error`; ignore anything after it.
+        if self.failed {
+            return Vec::new();
+        }
+
+        // An `error` object mid-stream ends the turn. Ignoring it let the turn end as an
+        // empty success, so the failure was invisible to the caller.
+        if let Some(error) = value.get("error") {
+            self.failed = true;
+            let detail = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("provider error");
+            return vec![StreamEvent::Error {
+                reason: ErrorReason::Error,
+                error: AssistantMessage::error(&self.model, detail),
+            }];
+        }
+
         let mut events = Vec::new();
 
         if let Some(usage) = value.get("usage").and_then(Value::as_object) {
@@ -487,6 +512,12 @@ impl OpenAiStreamParser {
     }
 
     fn finish(&mut self) -> Vec<StreamEvent> {
+        // A failed stream already yielded its terminal `Error`; emitting a `Done` now would
+        // let "last terminal event wins" consumers read success.
+        if self.failed {
+            return Vec::new();
+        }
+
         let mut events = Vec::new();
 
         // Finalize tool-call arguments now that the full JSON has arrived.
@@ -503,6 +534,23 @@ impl OpenAiStreamParser {
             {
                 *slot = arguments;
             }
+        }
+
+        // A stream that carried a tool call but no `finish_reason` was cut off: the call may
+        // be incomplete, and defaulting to `Stop` would silently drop it. Fail instead.
+        let has_tool_call = self
+            .partial
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolCall { .. }));
+        if self.finish_reason.is_none() && has_tool_call {
+            return vec![StreamEvent::Error {
+                reason: ErrorReason::Error,
+                error: AssistantMessage::error(
+                    &self.model,
+                    "the stream ended before the tool call finished (no finish_reason)",
+                ),
+            }];
         }
 
         // Emit the matching `*_end` events for every block, in order.
@@ -652,5 +700,59 @@ mod tests {
             body_for(ThinkingLevel::Max)["reasoning_effort"],
             json!("high")
         );
+    }
+
+    #[test]
+    fn an_error_object_in_the_stream_ends_it() {
+        let model = test_model();
+        let mut parser = OpenAiStreamParser::new(&model);
+
+        parser.handle_chunk(&json!({ "choices": [{ "delta": { "content": "hi" } }] }));
+        let events = parser.handle_chunk(&json!({ "error": { "message": "boom" } }));
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Error { .. })),
+            "expected a terminal error, got {events:?}"
+        );
+
+        // Nothing after the error is read, and `finish` must not append a success `Done`.
+        assert!(parser
+            .handle_chunk(&json!({ "choices": [{ "delta": { "content": "more" } }] }))
+            .is_empty());
+        assert!(parser.finish().is_empty(), "no Done after an error");
+    }
+
+    #[test]
+    fn a_truncated_stream_with_a_tool_call_is_not_a_silent_success() {
+        let model = test_model();
+        let mut parser = OpenAiStreamParser::new(&model);
+
+        // A tool call begins, but the stream ends with no `finish_reason`.
+        parser.handle_chunk(&json!({
+            "choices": [{ "delta": { "tool_calls": [{
+                "index": 0,
+                "id": "call_1",
+                "function": { "name": "read_file", "arguments": "{\"path\":\"a" }
+            }] } }]
+        }));
+
+        let events = parser.finish();
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Error { .. })),
+            "a truncated tool call must fail, not stop, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn a_stream_with_no_finish_reason_and_no_tool_call_still_stops() {
+        // Some servers omit `finish_reason` on a plain-text stream; that is a clean stop.
+        let model = test_model();
+        let mut parser = OpenAiStreamParser::new(&model);
+        parser.handle_chunk(&json!({ "choices": [{ "delta": { "content": "hi" } }] }));
+
+        let reason = parser.finish().iter().find_map(|event| match event {
+            StreamEvent::Done { reason, .. } => Some(*reason),
+            _ => None,
+        });
+        assert_eq!(reason, Some(StopReason::Stop));
     }
 }

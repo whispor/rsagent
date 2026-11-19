@@ -81,6 +81,11 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **An OpenAI stream's mid-stream error, and a truncated tool call, now fail the turn.** An
+  `{"error": ...}` object in the stream was ignored, so the turn ended as an empty success and
+  the failure was invisible; it now ends with a terminal error, and nothing after it is read.
+  And a stream that carried a tool call but no `finish_reason` (a cut-off connection) defaulted
+  to `Stop`, silently dropping the call; it now fails instead.
 - **Provider retries respect `Retry-After`, jitter the delay, and skip `409`.** The backoff
   ignored the server's `Retry-After` (both the delta-seconds and HTTP-date forms), used a
   fixed schedule that let many clients retry in lockstep, and treated `409 Conflict` as
