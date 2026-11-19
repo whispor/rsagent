@@ -833,11 +833,49 @@ README。成本约 0.5 天。
 见 §2 的 C1（信任边界 opt-in）与 C2（记忆蒸馏限频）。**评审方倾向**：C1 做「只读命令不
 启动进程」；C2 做「每 5 轮最多一条蒸馏笔记」。
 
+### D7 · 🆕 `STABILITY.md` 的公开 API 清单与实际导出**范围不一致**
+
+- **状态**：待办 · **成本**：约 0.5 天 · **影响**：中（契约歧义，与 A1/A5 同类）
+- **问题（2026-11-20 06:49 评审方实测计数）**：
+
+  [STABILITY.md](../STABILITY.md) 的**正文**说：
+
+  > A crate's public API is exactly what its crate root re-exports (`pub use`), plus its
+  > documented public items.
+
+  但紧随其后的**表格**只列了 **30 项**（`rsagent-ai` 13 + `rsagent-agent` 17），
+  而两个 crate root **实际 `pub use` 了 79 项**（26 + 53）。**49 项导出未列入表中**，
+  例如：
+
+  | Crate | 已导出但**未**列入 STABILITY 表的（举例） |
+  | --- | --- |
+  | `rsagent-ai` | `AssistantMessage`、`UserMessage`、`SystemMessage`、`ToolResultMessage`、`Auth`、`EventStream`、`AnthropicProvider`、`OpenAiProvider`、`FauxProvider`、`FauxBlock`、`FauxResponse`、`Modality`、`now_millis` |
+  | `rsagent-agent` | `AllowAll`、`DenyAll`、`BreakerPolicy`、`BreakerReport`、`BreakerState`、`CancelToken`、`CatalogError`、`PREFIX_SEPARATOR`、`SourceHealth`、`SourceKind`、`UnhealthySource`、`HealthProbe`、`BuiltinSource`、`LocalSource`、`McpHttpSource`、`McpStdioSource`、`SkillSource`、`WebSource`、`WebSourceConfig`、`builtin_tools`、`memory_tools`、`select_builtin_tools`、各 `*Tool` 类型、`DEFAULT_MEMORY_CAP`、`DEFAULT_RECALL_LIMIT`、`MAX_NOTE_CHARS` |
+
+- **为什么这是缺陷（而非小瑕疵）**：正文与表格对「什么是契约」给出**两个不同答案**。
+  读者按表格理解，会认为 `BreakerPolicy`、`SourceHealth`、`WebSourceConfig`、
+  `MAX_NOTE_CHARS`、`builtin_tools` 等**不受 semver 保护**、可随意改动；
+  而按正文理解，它们**都是**契约的一部分。**这与 A1（`--allow` 类别语义）和 A5（doctor
+  的 CI gate 承诺）是同一类问题：文档承诺的边界不清，用户会在关键时刻拿到错误结论。**
+  后果是双向的：用户可能依赖了「其实没承诺」的东西，维护者也可能改坏「其实承诺了」的东西。
+- **方案（二选一，需先定调）**：
+  - **(a) 让表格穷尽**：把 79 项全部列入，按模块分组。诚实但表会很长，且每次新增导出
+    都要同步——容易再次漂移。
+  - **(b) 让正文与表格口径一致（推荐）**：正文改为「契约 = 本表所列项 + 各 crate 的
+    `pub use` 中**在 rustdoc 里带文档**的项」，并在表格加一行说明「未列出的导出按
+    `#[doc(hidden)]` 或 `pub(crate)` 处理」。**更彻底的做法**：对不打算承诺的导出加
+    `#[doc(hidden)]`，让「是否契约」由代码而非文档表达——**这样两者不可能再漂移**。
+- **验收**：选 (b) 时，加一个测试或 CI 检查：`STABILITY.md` 表中列出的名字必须都能在
+  对应 crate root 找到（防止表格写了不存在的项）；反之，未列出的导出应带 `#[doc(hidden)]`。
+- **关联**：REVIEW.md §5 的「文档承诺与实际行为不符」主题；A1、A5。
+
 ---
 
 **评审方对阶段 2 的总评**：**D1 是唯一真正重要的一项**——它保护的是「审批是唯一防线」
-这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。D3/D4 是低成本清理。
-D5 是用户可见的行为修正。D6 需要你决策。**建议按 D1 → D2 → D3/D4 → D5 → D6 推进。**
+这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。**D7 修的是「契约到底包含
+什么」这个前提**——它不影响运行，但影响所有下游用户对「能不能依赖」的判断，且与 A1/A5
+同属本项目最高价值的一类缺陷。D3/D4 是低成本清理。D5 是用户可见的行为修正。
+D6 需要你决策。**建议按 D1 → D2 → D7 → D3/D4 → D5 → D6 推进。**
 
 ---
 
