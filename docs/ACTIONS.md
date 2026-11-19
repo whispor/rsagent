@@ -391,8 +391,7 @@ B3 消除了「接受连接后停发字节 → 永久卡住」）。
 
 #### B4 · 重试策略：尊重 `Retry-After`、加 jitter
 
-- **状态**：**进行中**（评审方 2026-11-19 18:19 观察到未提交的 WIP；提交后请改为
-  `已完成 (<commit>)` 并补验收证据）
+- **状态**：已完成 (2823117)
 - **成本**：约 0.5 天 · **影响**：中
 - **问题**：`providers/http.rs` 的重试忽略 `Retry-After`、无 jitter、把 409 当可重试。
 - **方案**：读 `Retry-After`（秒数或 HTTP-date）作为退避下限；退避加**随机 jitter**
@@ -400,6 +399,26 @@ B3 消除了「接受连接后停发字节 → 永久卡住」）。
 - **验收**：新增单测覆盖 `Retry-After` 解析（秒 + date 两种）、jitter 落在区间内、
   409 不再重试。
 - **关联**：M2。
+
+```
+- 状态：已完成 (2823117)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 264 通过 / 0 失败（较上轮 +3）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：retry_after_accepts_seconds_and_a_date、jitter_stays_within_the_backoff_range、
+    retry_delay_honours_a_hint_and_caps_it；retryable_status 测试补入 409（不重试）
+- 实现：
+  - `is_retryable_status` → `matches!(status.as_u16(), 408 | 429 | 500..=599)`（移除 409）。
+  - `retry_after(headers)` → `parse_retry_after`：纯秒数 / IMF-fixdate 两种；过期日期返回 None。
+  - `retry_delay(attempt, hint, seed)`：指数退避 + equal jitter（`[base/2, base]`），
+    `hint` 取 `max` 作下限，`MAX_BACKOFF = 60s` 封顶；纯函数，可无睡眠单测。
+  - `jitter_seed()` 用 `subsec_nanos() ^ 计数器`，同纳秒并发重试也不同。
+- 采纳评审方两条预审建议：①`parse_http_date` 文档点明「只支持 IMF-fixdate」；
+  ②jitter 种子混入计数器。手写日期解析而非引入 `httpdate`/`chrono`，符合护栏 #1。
+- 文档同步：CHANGELOG.md
+```
 
 > **评审方预审（2026-11-19 18:19，针对未提交的 WIP，提交后需重新核实）**
 >
