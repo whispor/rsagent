@@ -29,8 +29,8 @@ use rsagent_agent::{
     DEFAULT_MEMORY_CAP,
 };
 use rsagent_ai::{
-    AnthropicProvider, FauxProvider, FauxResponse, Model, Models, OpenAiProvider, StreamOptions,
-    ThinkingLevel,
+    AnthropicProvider, FauxBlock, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
+    StopReason, StreamOptions, ThinkingLevel,
 };
 use serde_json::Value;
 
@@ -312,9 +312,7 @@ async fn main() -> anyhow::Result<()> {
 
     if let Some(prompt) = cli.print.clone() {
         if let Some(faux) = &faux_handle {
-            faux.set_responses(vec![FauxResponse::text(format!(
-                "(faux) you said: {prompt}"
-            ))]);
+            faux.set_responses(vec![faux_reply(&prompt, cli.thinking)]);
         }
         let result = run_prompt(&mut agent, &mut rx, &mut renderer, &mut log, prompt).await;
         // Persist before acting on the result, so a failed run is still recorded.
@@ -364,6 +362,23 @@ fn is_model_failure(error: &anyhow::Error) -> bool {
         error.downcast_ref::<AgentError>(),
         Some(AgentError::ModelFailed { .. })
     )
+}
+
+/// The scripted `--faux` reply for a one-shot `--print` run.
+///
+/// When a thinking level is requested the reply carries a reasoning block too, so the
+/// offline demo actually exercises the reasoning path — and a test can assert that the
+/// answer alone reaches stdout while the reasoning goes to stderr (`ACTIONS.md` A4).
+fn faux_reply(prompt: &str, thinking: ThinkingLevel) -> FauxResponse {
+    let mut blocks = Vec::new();
+    if thinking != ThinkingLevel::Off {
+        blocks.push(FauxBlock::Thinking("(faux) reasoning".to_string()));
+    }
+    blocks.push(FauxBlock::Text(format!("(faux) you said: {prompt}")));
+    FauxResponse {
+        blocks,
+        stop_reason: StopReason::Stop,
+    }
 }
 
 /// Open the `--log` sink, or a no-op sink when `--log` was not passed.

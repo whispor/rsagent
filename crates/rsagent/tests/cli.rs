@@ -41,6 +41,29 @@ fn print_stdout_is_only_the_answer() {
 }
 
 #[test]
+fn print_sends_reasoning_to_stderr_not_stdout() {
+    // `--print --thinking` must keep the reasoning out of the redirected answer file: the
+    // answer alone owns stdout, while the dim reasoning goes to stderr (ACTIONS.md A4).
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--thinking", "high"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stdout, "(faux) you said: hi\n", "stdout: {stdout:?}");
+    assert!(
+        stderr.contains("(faux) reasoning"),
+        "the reasoning must go to stderr: {stderr:?}"
+    );
+    assert!(
+        !stdout.contains("reasoning"),
+        "the reasoning must not reach stdout: {stdout:?}"
+    );
+}
+
+#[test]
 fn version_flag_prints_the_crate_version() {
     let output = rsagent().arg("--version").output().expect("run rsagent");
 

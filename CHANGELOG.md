@@ -52,6 +52,9 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   / `DEFAULT_RECALL_LIMIT` constants (decision D16 in `docs/EXTENSIBILITY.md`).
 
 ### Changed
+- **`--faux --print --thinking <level>` now scripts a reasoning block.** The offline demo
+  emits a short reasoning block before the answer when a thinking level is requested, so
+  the reasoning rendering can be seen (and tested) without a network model.
 - **Breaking: `Approver::approve` / `needs_prompt` now take the tool's `Permission`.**
   The category (`read` / `write` / `exec` / `network`) is passed alongside the name so a
   policy can vary by kind — the mechanism behind `--allow`. A custom `Approver` adds the
@@ -78,6 +81,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **`--print` sends extended reasoning to stderr.** With `--thinking`, the reasoning
+  deltas were written to stdout, so `rsagent --print --thinking high "…" > answer.md`
+  mixed the reasoning into the answer file. Reasoning now goes to stderr in a one-shot run
+  (stdout stays the answer alone, as the contract already promised); the REPL is unchanged.
 - **`read_file` no longer strips `\r`, so editing a CRLF file works.** The reader kept the
   `\r` out of its output while `edit_file` matched byte-for-byte, so reading a Windows file
   and pasting a line back as `old_string` always failed with `old_string not found`. The

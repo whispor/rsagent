@@ -292,14 +292,30 @@ impl Renderer {
     }
 
     /// Append a reasoning delta, starting a fresh line if an answer was in progress.
+    ///
+    /// Reasoning is progress, not the answer, so in a one-shot `--print` run it goes to
+    /// stderr — `--print --thinking high "…" > answer.md` leaves `answer.md` holding the
+    /// answer alone. The REPL keeps it on stdout, interleaved with the answer.
     fn render_thinking_delta(&mut self, delta: &str) {
         if self.line_open && !self.thinking_open {
             self.flush_line();
         }
-        print!("{}", self.palette.dim(delta));
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+        let text = self.palette.dim(delta);
+        self.write_thinking(&text);
         self.line_open = true;
         self.thinking_open = true;
+    }
+
+    /// Write reasoning output to the stream that matches the output mode: stderr for a
+    /// one-shot `--print` run (keeping stdout to the answer), stdout otherwise.
+    fn write_thinking(&self, text: &str) {
+        if self.mode == OutputMode::OneShot {
+            eprint!("{text}");
+            std::io::Write::flush(&mut std::io::stderr()).ok();
+        } else {
+            print!("{text}");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
     }
 
     /// Append an answer delta, starting a fresh line if reasoning was in progress.
@@ -412,7 +428,13 @@ impl Renderer {
 
     pub(crate) fn flush_line(&mut self) {
         if self.line_open {
-            println!();
+            // Close the line on the stream it was opened on: a reasoning line lives on
+            // stderr in `--print` mode, an answer line always on stdout.
+            if self.thinking_open {
+                self.write_thinking("\n");
+            } else {
+                println!();
+            }
             self.line_open = false;
         }
         self.thinking_open = false;
