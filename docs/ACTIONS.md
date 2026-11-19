@@ -355,7 +355,7 @@
 
 #### B3 · provider 增加读超时（idle timeout）
 
-- **状态**：待办
+- **状态**：已完成 (bd294ff)
 - **成本**：约 1 天 · **影响**：中高（长会话卡死）
 - **问题**：`providers/core.rs` 只有 `connect_timeout`（10s）。服务端**接受连接后停发
   字节**（半开连接、网关静默挂起）时，`stream()` 会永久等待，一个 turn 卡死。
@@ -366,6 +366,23 @@
 - **验收**：新增测试：mock server 接受连接后不发送任何字节 → 断言在 `read_timeout` 后
   收到 `StreamEvent::Error` 而非永久挂起。
 - **关联**：M1。
+
+```
+- 状态：已完成 (bd294ff)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告（含 --all-targets，新集成测试已编译）
+  - cargo test --workspace --locked  → 261 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：a_stalled_stream_ends_with_an_error_instead_of_hanging
+    （tests/stream_timeout.rs，端到端：loopback server 发 200 头后停发 body）
+- 实现：`core.rs` 抽出 `build_client(read_timeout)`，`.connect_timeout(10s)` +
+  `.read_timeout(READ_TIMEOUT=120s)`，**未**设 `.timeout()`；两个 provider 各加
+  `#[must_use] pub fn with_read_timeout(Duration)` 覆盖（供慢端点调大、测试调小）。
+- 测试用 `std::net::TcpListener` + `std::thread` 起桩服务器，无需给 tokio 开 `net` 特性
+  （护栏：未改任何依赖）。
+- 文档同步：CHANGELOG.md、`ProviderCore` 客户端字段与 `READ_TIMEOUT` 文档注释
+```
 
 ---
 
