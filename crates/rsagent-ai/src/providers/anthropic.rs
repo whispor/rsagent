@@ -7,6 +7,7 @@
 //! [`StreamEvent`] sequence the rest of the stack already understands.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use async_stream::stream;
 use futures::StreamExt;
@@ -56,6 +57,16 @@ impl AnthropicProvider {
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.core.set_base_url(base_url.into());
+        self
+    }
+
+    /// Override the per-read (idle) timeout for the streaming response.
+    ///
+    /// The default is generous; lower it to fail fast on a stalled connection, or raise it
+    /// for an endpoint that is slow between tokens.
+    #[must_use]
+    pub fn with_read_timeout(mut self, read_timeout: Duration) -> Self {
+        self.core = self.core.with_read_timeout(read_timeout);
         self
     }
 

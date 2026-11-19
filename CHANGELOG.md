@@ -81,6 +81,13 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **A stalled provider stream now fails instead of hanging the turn.** Only the *connect*
+  phase was bounded, so a server that accepted the request and then went silent (a half-open
+  connection, a gateway that stops sending) left the stream waiting forever. The HTTP client
+  now also sets a per-read (idle) timeout — generous by default, and overridable with
+  `with_read_timeout` on either provider — so a silent connection ends the stream with an
+  error. The whole-request timeout is deliberately *not* set, so a long answer is never cut
+  off mid-stream.
 - **`mcp-http` treats a 429 or 5xx as an outage, not a business failure.** The transport
   parsed the body first, so a gateway error that carried a JSON-RPC `error` (a common shape
   for a rate-limited or overloaded endpoint) was read as the server refusing the call — the

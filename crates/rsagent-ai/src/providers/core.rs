@@ -16,6 +16,27 @@ use crate::types::Model;
 /// alone, because streaming responses are long-lived and must not be cut off mid-stream.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a single read from the provider may stall before the stream is failed.
+///
+/// This bounds each *read*, not the whole request: a streaming answer may legitimately take
+/// minutes, but it should never go silent for this long. It catches a half-open connection —
+/// or a gateway that accepts the request and then stops sending — so a turn fails instead of
+/// waiting forever. Set well above the normal gap between tokens.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Build the provider's HTTP client: a bounded connect, a bounded idle read, and no
+/// whole-request timeout.
+///
+/// A builder with only timeouts cannot fail to build; fall back to the default client rather
+/// than panicking if it ever does.
+fn build_client(read_timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .build()
+        .unwrap_or_default()
+}
+
 /// Identity, model catalog, and key/base-URL resolution for a provider.
 #[derive(Debug)]
 pub(super) struct ProviderCore {
@@ -24,10 +45,10 @@ pub(super) struct ProviderCore {
     env_keys: Vec<String>,
     base_url_override: Option<String>,
     /// One HTTP client per provider, so its connection pool is reused across requests
-    /// instead of rebuilt on every call. Deliberately built with no *request* timeout:
+    /// instead of rebuilt on every call. Deliberately built with no *whole-request* timeout:
     /// streaming responses are long-lived and must not be cut off mid-stream. A short
-    /// *connect* timeout is set instead, so a server that accepts TCP but never answers
-    /// cannot hang a turn forever.
+    /// *connect* timeout and a generous *read* (idle) timeout are set instead, so a server
+    /// that accepts TCP but never answers — or stalls mid-stream — cannot hang a turn.
     client: reqwest::Client,
 }
 
@@ -39,13 +60,17 @@ impl ProviderCore {
             models,
             env_keys,
             base_url_override: None,
-            // A builder with only a connect timeout cannot fail to build; fall back to the
-            // default client rather than panicking if it ever does.
-            client: reqwest::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .build()
-                .unwrap_or_default(),
+            client: build_client(READ_TIMEOUT),
         }
+    }
+
+    /// Replace the per-read (idle) timeout, rebuilding the client.
+    ///
+    /// Used to tolerate an endpoint that is slow between tokens, and by tests that need the
+    /// timeout to fire quickly.
+    pub(super) fn with_read_timeout(mut self, read_timeout: Duration) -> Self {
+        self.client = build_client(read_timeout);
+        self
     }
 
     /// The provider's shared HTTP client (cheap to clone; clones share the pool).
