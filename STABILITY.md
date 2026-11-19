@@ -51,8 +51,10 @@ is therefore **not** a breaking change. · 两个 crate 在可能新增变体处
 
 - **Session file**: a versioned JSON envelope. The `version` field is bumped whenever the
   stored shape changes incompatibly; an older build **rejects** a newer file instead of
-  misreading it. · **会话文件**：带版本号的 JSON 信封；不兼容变更时递增 `version`，旧版
-  构建会**拒绝**而非误读新版文件。
+  misreading it — and, because it cannot be re-saved safely, the session is then left
+  read-only so the newer file is never overwritten. · **会话文件**：带版本号的 JSON 信封；
+  不兼容变更时递增 `version`，旧版构建会**拒绝**而非误读新版文件；由于无法安全回写，该会话
+  随即转为**只读**，绝不会覆盖新版文件。
 - **`--json`**: one `AgentEvent` per line, internally tagged with `type`, camelCase
   fields. **Adding** a field or event kind is allowed within a minor version; **removing
   or renaming** one is breaking. · **`--json`**：每行一个 `AgentEvent`，`type` 内部标签 +
@@ -89,6 +91,24 @@ endpoint you configure, the tool sources you declare, and `webfetch` targets the
 chooses. There is no analytics, no phone-home, and no background update check. · **rsagent
 不收集任何遥测。** 它只向你指定的地方发送数据：你配置的模型端点、你声明的工具来源，以及
 模型选择的 `webfetch` 目标。没有分析上报、没有回连、没有后台更新检查。
+
+## Trust boundary · 信任边界
+
+**Project configuration is executable input.** A project `rsagent.toml` can declare
+`local` / `mcp-stdio` / `skill` sources, which are spawned while the tool set is assembled —
+*before* any approval prompt. Treat a repository you have not reviewed the same way you
+would treat a script in it: `git clone && rsagent --list-tools` runs what the repo declares.
+· **项目配置即可执行输入。** 项目 `rsagent.toml` 可声明 `local` / `mcp-stdio` / `skill`
+来源，它们会在装配工具集时（**任何审批之前**）被启动。未经审阅的仓库，应按其中的脚本一样
+对待：`git clone && rsagent --list-tools` 会执行仓库声明的命令。
+
+An auto-discovered `.env` is likewise untrusted. Two credential-sensitive variables are
+**refused** from it: `RSAGENT_BASE_URL` (would redirect where your API key is sent) and
+`RSAGENT_USER_CONFIG` (would point the user config at a repo-controlled file). Both are
+still honored from the real process environment or a CLI flag. · 自动发现的 `.env` 同样
+不可信：两个与凭据相关的变量会被**拒绝**——`RSAGENT_BASE_URL`（会改变 API key 的发送目标）
+与 `RSAGENT_USER_CONFIG`（会把用户配置指向仓库内文件）。二者仍可从真实进程环境或命令行参数
+生效。
 
 ## Changing this file · 修改本文件
 

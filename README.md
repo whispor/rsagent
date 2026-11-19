@@ -70,21 +70,26 @@ cargo run -p rsagent -- --faux --print "hello"
 ### Talk to a real model
 
 Any OpenAI Chat Completions-compatible endpoint works (OpenAI, DeepSeek, Groq,
-Together, OpenRouter, Ollama, vLLM, ...). The easiest way is to put your settings in
-a `.env` file at the project root — it is loaded automatically at startup:
+Together, OpenRouter, Ollama, vLLM, ...). The easiest way is to put your key and model
+in a `.env` file at the project root — it is loaded automatically at startup:
 
 ```bash
 cp .env.example .env
 # then edit .env:
-#   RSAGENT_BASE_URL=https://api.deepseek.com/v1
 #   RSAGENT_API_KEY=sk-...
 #   RSAGENT_MODEL=deepseek-chat
 
-cargo run -p rsagent -- --print "list the files in this directory"
+cargo run -p rsagent -- --base-url https://api.deepseek.com/v1 --print "list the files"
 ```
 
 `.env` is git-ignored. You can also pass everything as flags or export the same
 variables (`RSAGENT_BASE_URL`, `RSAGENT_API_KEY`, `RSAGENT_MODEL`).
+
+> **The base URL is not read from `.env`.** A `.env` that arrived with a `git clone`
+> could otherwise point `RSAGENT_BASE_URL` at an attacker's server and send your real
+> API key there. Set the endpoint with `--base-url` or `RSAGENT_BASE_URL` in your shell
+> environment; a value in `.env` is ignored with a warning. See
+> [Configuration](#configuration).
 
 A local Ollama server:
 
@@ -513,8 +518,9 @@ rsagent --session work.jsonl --print "read Cargo.toml"   # header + 2 message li
 rsagent --session work.jsonl --print "now summarize it"  # appends 2 more lines
 ```
 
-All session writes are atomic (a temp file plus a rename), so a crash or a concurrent
-run never leaves half a document behind.
+All session writes are atomic (a temp file plus a rename), so a crash never leaves half a
+document behind. The JSONL append mode is **not** safe for two concurrent runs sharing one
+file — their lines can interleave — so point each run at its own session file.
 
 ## Memory
 
@@ -602,23 +608,31 @@ behaves unexpectedly.
 ## Configuration
 
 Environment variables are read from the process environment. A `.env` file in the
-working directory is loaded at startup (simple `KEY=VALUE` lines; existing
-environment variables win). Tool sources are configured by **two** `rsagent.toml` files
-that are layered together: a **user-level** file (found at `$XDG_CONFIG_HOME/rsagent/`,
-`%APPDATA%\rsagent\`, or `~/.config/rsagent/`; override with `RSAGENT_USER_CONFIG`) and a
-**project-local** one found at or above the working directory. Entries are merged by source
-`id`, and a project entry overrides a user entry with the same id, so a repo can pin or
-override a globally-declared source. The overall precedence is
+working directory (or any parent) is loaded at startup (simple `KEY=VALUE` lines;
+existing environment variables win). Tool sources are configured by **two**
+`rsagent.toml` files that are layered together: a **user-level** file (found at
+`$XDG_CONFIG_HOME/rsagent/`, `%APPDATA%\rsagent\`, or `~/.config/rsagent/`; override with
+`RSAGENT_USER_CONFIG`) and a **project-local** one found at or above the working directory.
+Entries are merged by source `id`, and a project entry overrides a user entry with the same
+id, so a repo can pin or override a globally-declared source. The overall precedence is
 **CLI flags > environment > project `rsagent.toml` > user `rsagent.toml` > built-in defaults**.
 
 | Variable | Purpose |
 | --- | --- |
-| `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. |
+| `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. **Not read from `.env`.** |
 | `RSAGENT_API_KEY` | API key for that endpoint. |
 | `RSAGENT_MODEL` | Model id to use. |
 | `ANTHROPIC_API_KEY` | API key used when `--anthropic` is passed. |
-| `RSAGENT_USER_CONFIG` | Override the user-level `rsagent.toml` path. |
+| `RSAGENT_USER_CONFIG` | Override the user-level `rsagent.toml` path. **Not read from `.env`.** |
 | `NO_COLOR` | Disable ANSI colors when set to a non-empty value. |
+
+> **Trust boundary.** A project `rsagent.toml` and a `.env` are treated as **executable
+> input**, not data. A `[[tools.sources]]` entry can spawn a program (`local`, `mcp-stdio`,
+> `skill`), so `git clone && rsagent --list-tools` runs whatever the repo declares — before
+> any approval prompt. Two variables are therefore refused from `.env` outright:
+> `RSAGENT_BASE_URL` (it would redirect your API key) and `RSAGENT_USER_CONFIG` (it would
+> point the user config at a repo-controlled file). Only run rsagent in a repository whose
+> configuration you trust.
 
 The `--help` output shows the env variable backing each flag but never its value.
 Colors are also disabled automatically when stdout is not a terminal, so redirected

@@ -78,6 +78,32 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **Anthropic: an `error` event no longer ends as a success.** The parser emitted a
+  terminal `Done` after an `error`, and consumers that take the last terminal event read
+  the failure as an empty success (exit `0`, no error in the transcript). `finish` now
+  suppresses `Done` once an error has been seen.
+- **Anthropic: extended thinking is replayed.** The assistant turn now re-sends its
+  `thinking` blocks (with signatures) before text and tool calls, so `--thinking` combined
+  with tool use works past the first turn instead of being rejected with a 400.
+- **Streaming no longer corrupts multi-byte characters split across network chunks.** The
+  SSE buffer holds raw bytes and decodes only complete lines, so a UTF-8 character straddling
+  two chunks (common for Chinese and emoji) is no longer replaced with U+FFFD.
+- **A subprocess can no longer hang a turn.** One deadline now covers writing the request,
+  waiting for exit, and draining the pipes; after a short grace the drain is abandoned, and a
+  timed-out `bash` command is killed as a process tree on Windows. A command that backgrounds
+  a daemon holding the inherited pipes no longer blocks forever.
+- **`mcp-stdio` stderr trimming no longer panics on a UTF-8 boundary.** The tail is cut on a
+  character boundary instead of a raw byte offset, so non-ASCII server diagnostics are kept
+  instead of silently killing the drain task.
+- **Sessions from a newer rsagent are no longer overwritten.** Such a file is refused and the
+  session becomes read-only, instead of being rewritten as an empty v1 transcript. An existing
+  empty `.jsonl` file is rewritten with a header rather than being left permanently unreadable,
+  and an append is only taken when the on-disk file is still a clean prefix of the transcript
+  (checked by fingerprint, so context compaction cannot strand dropped turns).
+- **A project `.env` can no longer redirect credentials.** `RSAGENT_BASE_URL` and
+  `RSAGENT_USER_CONFIG` are ignored when they come from an auto-discovered `.env` (a value in
+  the real environment or a flag still wins), closing a way for a cloned repo to send your API
+  key to an attacker's endpoint.
 - A failing run's error event is now rendered before the process returns. Previously a
   model error could be queued but never printed when the run ended in the same poll.
 - HTTP providers apply a 10-second **connect** timeout, so an unreachable endpoint fails
