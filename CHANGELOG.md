@@ -121,6 +121,13 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   longer relies on `echo` being an executable: `echo` is a shell builtin, so on Windows it
   resolves to no program (and under MSYS to one that may not start). It now writes a tiny
   fixture program instead, so the test runs on every platform.
+- **Memory: a note is appended, not rewritten, so concurrent writers no longer lose notes.**
+  `Memory::append` was a read-modify-write of the whole file, so two processes sharing one
+  `--memory` file clobbered each other (last writer wins). It now appends a single line and
+  rewrites only once the file has outgrown its cap.
+- **Memory: a single note is capped** at `MAX_NOTE_CHARS` (2000). An oversized note — which
+  the model can write — was folded verbatim into the system prompt and could crowd the
+  context budget; it is now truncated with a visible marker, like an oversized tool result.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead

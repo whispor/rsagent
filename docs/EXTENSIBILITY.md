@@ -339,8 +339,10 @@ MCP 的 `npx -y` 会在首次运行时自行拉包，所以"安装"对多数来�
 记忆是**核心能力**而非一种工具来源，所以不走 `ToolSource`，而是三条缝各司其职：
 
 - **存储**：`Memory`（`crates/rsagent-agent/src/memory.rs`）是一个追加式 JSONL 笔记
-  文件，一行一条 `MemoryEntry`（`{at, text}`），超出容量时丢弃最旧的一条。它复用会话
-  文件已验证的"追加 + 截断尾行丢弃"约定，不新造崩溃恢复逻辑。
+  文件，一行一条 `MemoryEntry`（`{at, text}`）。单条笔记超过 `MAX_NOTE_CHARS`（2000）时
+  截断；写入是**单行追加**而非整文件重写，因此两个进程共用一个 `--memory` 文件不会相互
+  覆盖，只有在文件超出容量时才重写以丢弃最旧的笔记。它复用会话文件已验证的"追加 + 截断
+  尾行丢弃"约定，不新造崩溃恢复逻辑。
 - **装配**：`Agent::with_memory(Arc<Memory>)` 把存储注入循环；循环在每个请求前把最近
   若干条笔记折进 system prompt（`system_prompt_with_memory`），并在压缩丢弃回合时
   蒸馏出一条 `[compacted]` 笔记。同一存储也经 `ToolContext::with_memory` 到达工具。

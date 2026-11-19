@@ -542,11 +542,15 @@ With `--memory` set, two tools become available:
 
 The newest notes are also folded into the system prompt on every request, so the model
 sees them without having to call `recall`; the store keeps the most recent 200 notes and
-drops older ones. When the transcript is compacted, the dropped turns are distilled into
-a single `[compacted]` note — what context management discards still survives on disk.
+drops older ones. A single note is capped at 2,000 characters, so one oversized note
+cannot crowd the prompt. When the transcript is compacted, the dropped turns are distilled
+into a single `[compacted]` note — what context management discards still survives on disk.
 
-Memory is a plain file you own: read, edit, or delete it with any tool. A truncated last
-line (from a crash mid-append) is dropped on load, exactly like an append-mode session.
+Memory is a plain file you own: read, edit, or delete it with any tool. Appending writes a
+single line rather than rewriting the file, so two processes sharing one `--memory` file do
+not overwrite each other's notes; the file is rewritten only once it has outgrown its cap.
+A truncated last line (from a crash mid-append) is dropped on load, exactly like an
+append-mode session.
 
 ## Exit codes
 

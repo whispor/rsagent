@@ -201,15 +201,19 @@ different provider at will.
 Alongside a session, an optional **memory** file (`--memory <FILE>`) keeps notes that
 outlive the process: an append-only JSONL log of `MemoryEntry` (`{at, text}`). The newest
 notes are folded into the system prompt on every request, so the model sees them without a
-lookup, and compaction distills dropped turns into a `[compacted]` note. Memory is
+lookup, and compaction distills dropped turns into a `[compacted]` note. Each append writes
+one line — the file is rewritten only to enforce the cap — so two processes sharing one file
+do not clobber each other, and a single note is capped at `MAX_NOTE_CHARS`. Memory is
 injected with `Agent::with_memory`; its `remember` / `recall` tools are added only when the
 flag is set (decision D16, [`EXTENSIBILITY.md` §3.7](EXTENSIBILITY.md)).
 
 除会话外，可选的**记忆**文件（`--memory <FILE>`）保存跨进程存活的笔记：一个追加式的
 JSONL 日志，一行一条 `MemoryEntry`（`{at, text}`）。最新的若干条笔记会在每个请求前折进
 system prompt，模型无需查询即可看到；裁剪时被丢弃的回合则蒸馏成一条 `[compacted]` 笔记。
-记忆经 `Agent::with_memory` 注入；其 `remember` / `recall` 工具仅在传入该参数时才加入
-（决策 D16，见 [`EXTENSIBILITY.md` §3.7](EXTENSIBILITY.md)）。
+每次追加只写一行——仅在需要执行容量上限时才重写文件——因此两个进程共用一个文件不会相互
+覆盖，且单条笔记以 `MAX_NOTE_CHARS` 封顶。记忆经 `Agent::with_memory` 注入；其
+`remember` / `recall` 工具仅在传入该参数时才加入（决策 D16，见
+[`EXTENSIBILITY.md` §3.7](EXTENSIBILITY.md)）。
 
 ---
 
