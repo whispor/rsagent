@@ -793,9 +793,34 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 
 ### D4 · CI 加固（低成本）
 
-- 给 workflow 加 `permissions: contents: read`（最小权限）。
-- actions 按 commit SHA 固定（防供应链）。
-- 加 `cargo-deny` / `cargo-audit` job。
+> **2026-11-20 06:19 评审方首次实读 `.github/workflows/ci.yml`（70 行）核实本节的建议。**
+> 结论：下面三项**确实都还没有**，建议成立；另发现**两个新的加固点**（4、5）。
+> 同时确认 CI 与 AGENTS.md 的四道门禁**完全对齐**（`check` 三平台跑 fmt/clippy/test，
+> `docs` 跑 `-D warnings` 的 rustdoc，`msrv` 在 1.95.0 上 `cargo check`），这部分无需改动。
+
+- **状态**：待办 · **成本**：约 0.5 天
+- **已有且正确、不要动的部分**：三平台矩阵（`fail-fast: false`）、`--locked` 全程、
+  `RUSTDOCFLAGS: -D warnings`、独立的 MSRV job（1.95.0 固定）。
+
+1. **加 `permissions: contents: read`**（workflow 级）。当前**没有** `permissions` 块，
+   因此 `GITHUB_TOKEN` 继承仓库默认权限——若默认是 read-write，一个被投毒的依赖构建脚本
+   就多了一分写权限。CI 只需要读代码。
+2. **actions 按 commit SHA 固定**。当前全部用浮动 tag：`actions/checkout@v4`、
+   `dtolnay/rust-toolchain@stable`、`dtolnay/rust-toolchain@1.95.0`、`Swatinem/rust-cache@v2`。
+   上游 tag 被移动或账号被接管时会静默拉到别的代码。改为 `@<sha> # vX.Y.Z` 并保留注释。
+3. **加 `cargo-deny` / `cargo-audit` job**。当前没有任何依赖审计——`Cargo.lock` 里
+   `reqwest`/`rustls`/`tokio` 这条链一旦出 RUSTSEC 公告，项目不会知道。
+4. **🆕 给每个 job 加 `timeout-minutes`**（建议 30）。当前**没有超时**，job 挂住会一直跑到
+   GitHub 的 6 小时上限。**这一条与本项目的历史直接相关**：H4 修的正是「子进程攥着管道
+   导致 turn 永久挂死」——在那之前，一个这样的测试就足以让 CI 烧掉 6 小时的额度，
+   而且表现为「CI 一直转圈」而非「测试失败」，很难排查。
+5. **🆕 加 `concurrency` 组**（`group: ${{ github.workflow }}-${{ github.ref }}` +
+   `cancel-in-progress: true`）。当前连推两次 main 会并行跑两套三平台矩阵，前一套的结果
+   已无意义却仍占额度。
+
+**验收**：改完后 `git push` 一次，确认 5 个 job 仍全绿（`ubuntu` / `macos` / `windows` /
+`Docs` / `MSRV`），且 workflow 文件里能搜到 `permissions:`、`timeout-minutes:`、
+`concurrency:`、以及 `@` 后跟 40 位十六进制的 action 引用。
 
 ### D5 · M6 路径基准（用户可见的静默差异）
 
