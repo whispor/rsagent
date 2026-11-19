@@ -14,7 +14,10 @@
 //!
 //! The server may answer `initialize` with an `Mcp-Session-Id` response header. When it
 //! does, every later request echoes it back, together with an `MCP-Protocol-Version`
-//! header. When it does not, no session id is sent and each request stands alone.
+//! header. When it does not, no session id is sent and each request stands alone. A reply
+//! is matched on the request's `id` **and** the absence of a `method` — a server→client
+//! request in the stream also carries an `id` — and `tools/list` pagination is followed for
+//! a bounded number of pages.
 //!
 //! # Failure classes
 //!
@@ -44,6 +47,12 @@ use super::mcp::{
 
 /// Per-request timeout when the configuration does not set one.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The most `tools/list` pages to follow before giving up.
+///
+/// A server that hands back a fresh cursor on every page would otherwise loop forever at
+/// load time. A real server has far fewer tools than this many pages could hold.
+const MAX_TOOL_PAGES: usize = 100;
 
 /// The `Accept` value MCP requires: the client understands both encodings.
 const ACCEPT: &str = "application/json, text/event-stream";
@@ -141,7 +150,7 @@ impl Connection {
     async fn list_tools(&self) -> Result<Vec<McpToolSpec>, CallError> {
         let mut tools = Vec::new();
         let mut cursor: Option<String> = None;
-        loop {
+        for _ in 0..MAX_TOOL_PAGES {
             let params = cursor
                 .as_deref()
                 .map_or_else(|| json!({}), |cursor| json!({ "cursor": cursor }));
@@ -152,10 +161,12 @@ impl Connection {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             if cursor.is_none() {
-                break;
+                return Ok(tools);
             }
         }
-        Ok(tools)
+        Err(CallError::Transport(format!(
+            "the MCP endpoint returned more than {MAX_TOOL_PAGES} pages of tools"
+        )))
     }
 
     /// Replace the remembered session id.
@@ -253,6 +264,18 @@ impl Connection {
 /// Pull the JSON-RPC result out of a response, mapping a JSON-RPC error to
 /// [`CallError::Protocol`].
 fn read_result(message: &Value, expected_id: Option<i64>) -> Result<Value, CallError> {
+    // A response carries no `method`; a server→client request does. If we were handed a
+    // request, it is not our answer — reject it rather than reading a `null` result out of
+    // it and reporting a silent empty success.
+    //
+    // Classified as `Transport` (feeds the breaker) rather than `Protocol`: a body carries a
+    // single object, so there is no stream left to scan for the real answer — the exchange is
+    // unusable and will keep failing the same way, so isolating the source stops the bleeding.
+    if message.get("method").is_some() {
+        return Err(CallError::Transport(
+            "the MCP endpoint answered with a request, not a response".to_string(),
+        ));
+    }
     if let Some(error) = message.get("error") {
         let code = error
             .get("code")
@@ -280,9 +303,14 @@ fn find_event_response(body: &str, id: Option<i64>) -> Result<Value, CallError> 
         let Ok(message) = serde_json::from_str::<Value>(&payload) else {
             continue;
         };
+        // A response carries no `method`; skip notifications and server→client requests,
+        // which may echo our `id` yet are not our answer.
+        if message.get("method").is_some() {
+            continue;
+        }
         if let Some(expected) = id {
             if message.get("id").and_then(Value::as_i64) != Some(expected) {
-                continue; // a notification or a response to another request
+                continue; // a response to another request
             }
         }
         return Ok(message);
@@ -838,6 +866,52 @@ mod tests {
 
         let names: Vec<String> = source.tools().iter().map(|t| t.spec().name).collect();
         assert_eq!(names, vec!["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn a_same_id_server_request_in_the_stream_is_not_the_response() {
+        // A server→client request in the SSE stream also carries an `id`; if it reuses the
+        // request's id, an id-only match would read a `null` result.
+        let source = source_over(|request| match request.method().as_deref() {
+            Some("initialize") => request.reply(json!({ "protocolVersion": "2025-06-18" })),
+            Some("notifications/initialized") => accepted(),
+            Some("tools/list") => {
+                let message: Value = serde_json::from_str(&request.body).expect("body");
+                let id = message.get("id").cloned().unwrap_or(Value::Null);
+                let decoy = json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "method": "sampling/createMessage", "params": {},
+                });
+                let response = json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": { "tools": [tool_json("echo")] },
+                });
+                Reply::sse(format!("data: {decoy}\n\ndata: {response}\n\n"))
+            }
+            _ => Reply::json("{}".to_string()).status(404),
+        })
+        .await;
+
+        assert_eq!(source.tools().len(), 1);
+        assert_eq!(source.tools()[0].spec().name, "echo");
+    }
+
+    #[tokio::test]
+    async fn a_constant_cursor_is_refused_rather_than_looping_forever() {
+        // A server that always hands back a fresh cursor would hang load time. The client
+        // must give up after a bounded number of pages instead of following it forever.
+        let url = serve(|request| match request.method().as_deref() {
+            Some("initialize") => request.reply(json!({ "protocolVersion": "2025-06-18" })),
+            Some("notifications/initialized") => accepted(),
+            Some("tools/list") => request.reply(json!({ "tools": [], "nextCursor": "again" })),
+            _ => Reply::json("{}".to_string()).status(404),
+        })
+        .await;
+
+        let error = McpHttpSource::new("loop", url, Vec::new(), Some(Duration::from_secs(5)))
+            .await
+            .expect_err("a server with an endless cursor must be refused");
+        assert!(error.contains("pages of tools"), "{error}");
     }
 
     #[tokio::test]

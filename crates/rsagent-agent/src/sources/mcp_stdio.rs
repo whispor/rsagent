@@ -11,10 +11,14 @@
 //!
 //! # Wire format
 //!
-//! Every message is one line of JSON, terminated by a newline. A request carries an `id`;
-//! the server's response echoes it. Notifications (like `notifications/initialized`) carry
-//! no `id` and get no response. Anything the server writes that is not a response to our
-//! request is ignored, so logging-style notifications are harmless.
+//! Every message is one line of JSON, terminated by a newline. A request carries an `id`,
+//! and the response echoes it; a reply is matched on that `id` **and** the absence of a
+//! `method`, because a server→client request also carries an `id` and must not be mistaken
+//! for our answer. Notifications (like `notifications/initialized`) carry no `id` and get
+//! no response. Anything the server writes that is not our response is ignored, so
+//! logging-style notifications are harmless. `tools/list` pagination is followed for a
+//! bounded number of pages, so a server that never stops handing back a cursor fails at
+//! load time instead of hanging.
 //!
 //! # Failure classes
 //!
@@ -51,6 +55,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How much of the server's stderr to keep for diagnostics.
 const STDERR_LIMIT: usize = 4096;
+
+/// The most `tools/list` pages to follow before giving up.
+///
+/// A server that hands back a fresh cursor on every page would otherwise loop forever at
+/// load time. A real server has far fewer tools than this many pages could hold.
+const MAX_TOOL_PAGES: usize = 100;
 
 /// How to (re)start the server process.
 #[derive(Debug, Clone)]
@@ -178,7 +188,7 @@ impl Session {
     async fn list_tools(&mut self, timeout: Duration) -> Result<Vec<McpToolSpec>, String> {
         let mut tools = Vec::new();
         let mut cursor: Option<String> = None;
-        loop {
+        for _ in 0..MAX_TOOL_PAGES {
             let params = cursor
                 .as_deref()
                 .map_or_else(|| json!({}), |cursor| json!({ "cursor": cursor }));
@@ -192,10 +202,12 @@ impl Session {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             if cursor.is_none() {
-                break;
+                return Ok(tools);
             }
         }
-        Ok(tools)
+        Err(format!(
+            "the MCP server returned more than {MAX_TOOL_PAGES} pages of tools"
+        ))
     }
 
     /// Send a request and wait for the response with the matching id.
@@ -219,8 +231,12 @@ impl Session {
                         timeout.as_secs()
                     ))
                 })??;
-            // Skip notifications and responses to other requests.
-            if incoming.get("id").and_then(Value::as_i64) != Some(id) {
+            // A response echoes our `id` and carries no `method`. A server→client *request*
+            // also carries an `id`, so requiring the absence of `method` is what keeps the
+            // two apart — otherwise a same-id request would be read as our (absent) result.
+            if incoming.get("method").is_some()
+                || incoming.get("id").and_then(Value::as_i64) != Some(id)
+            {
                 continue;
             }
             if let Some(error) = incoming.get("error") {
@@ -715,6 +731,123 @@ mod tests {
 
         let names: Vec<String> = source.tools().iter().map(|t| t.spec().name).collect();
         assert_eq!(names, vec!["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn a_same_id_server_request_is_not_taken_as_the_response() {
+        // A JSON-RPC *request* from the server also carries an `id`. If it reuses ours, an
+        // id-only match would read its (absent) `result` and return a silent empty success.
+        async fn write_line(output: &mut DuplexStream, value: &Value) -> std::io::Result<()> {
+            let mut text = serde_json::to_string(value).expect("serialize");
+            text.push('\n');
+            output.write_all(text.as_bytes()).await?;
+            output.flush().await
+        }
+
+        async fn server(mut input: DuplexStream, mut output: DuplexStream) {
+            let mut reader = BufReader::new(&mut input);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
+                    continue;
+                };
+                let Some(method) = message.get("method").and_then(Value::as_str) else {
+                    continue; // the `initialized` notification
+                };
+                let id = message["id"].clone();
+                match method {
+                    "initialize" => {
+                        let reply = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": { "protocolVersion": "2025-06-18" },
+                        });
+                        if write_line(&mut output, &reply).await.is_err() {
+                            return;
+                        }
+                    }
+                    "tools/list" => {
+                        let reply = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": { "tools": [tool_json("echo")] },
+                        });
+                        if write_line(&mut output, &reply).await.is_err() {
+                            return;
+                        }
+                    }
+                    "tools/call" => {
+                        // A decoy request reusing our id, then the real response. Only the
+                        // response lacks a `method`.
+                        let decoy = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "method": "sampling/createMessage", "params": {},
+                        });
+                        if write_line(&mut output, &decoy).await.is_err() {
+                            return;
+                        }
+                        let reply = json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "result": { "content": [{ "type": "text", "text": "pong" }] },
+                        });
+                        if write_line(&mut output, &reply).await.is_err() {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let (client_write, server_read) = tokio::io::duplex(4096);
+        let (server_write, client_read) = tokio::io::duplex(4096);
+        tokio::spawn(server(server_read, server_write));
+
+        let source = McpStdioSource::over(
+            "decoy",
+            Box::new(client_write),
+            Box::new(client_read),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("the handshake must succeed");
+
+        let tools = source.tools();
+        let context = ToolContext::new(".");
+        let result = tools[0]
+            .execute("call", json!({}), &context)
+            .await
+            .expect("the real response must be read, not the decoy request");
+        assert_eq!(result.content[0].as_text(), Some("pong"));
+    }
+
+    #[tokio::test]
+    async fn a_constant_cursor_is_refused_rather_than_looping_forever() {
+        // A server that always hands back a fresh cursor would hang load time. The client
+        // must give up after a bounded number of pages instead of following it forever.
+        let (client_write, server_read) = tokio::io::duplex(4096);
+        let (server_write, client_read) = tokio::io::duplex(4096);
+        tokio::spawn(serve(server_read, server_write, |message| {
+            match message.get("method").and_then(Value::as_str) {
+                Some("initialize") => respond(message, json!({ "protocolVersion": "2025-06-18" })),
+                Some("tools/list") => {
+                    respond(message, json!({ "tools": [], "nextCursor": "again" }))
+                }
+                _ => None,
+            }
+        }));
+
+        let error = McpStdioSource::over(
+            "loop",
+            Box::new(client_write),
+            Box::new(client_read),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("a server with an endless cursor must be refused");
+        assert!(error.contains("pages of tools"), "{error}");
     }
 
     #[tokio::test]

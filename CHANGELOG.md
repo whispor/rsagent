@@ -81,6 +81,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **MCP replies are matched by direction, and `tools/list` pagination is bounded.** Both
+  transports matched a response by `id` alone, but a server→client *request* also carries an
+  `id`; a same-id request was taken as the answer and read as a silent empty success. A reply
+  must now echo the `id` *and* carry no `method`. The `tools/list` cursor loop is also capped
+  at 100 pages, so a server that returns a fresh cursor forever fails at load time instead of
+  hanging.
 - **`rsagent tools doctor` now fails the gate on every problem.** It previously exited `0`
   for a `rsagent.toml` that could not be parsed (falling back to the built-ins) and for a
   source that reports `Unhealthy`, so the documented CI gate always passed. It now counts
