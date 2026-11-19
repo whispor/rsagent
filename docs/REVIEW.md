@@ -330,16 +330,22 @@ H1–H7、A 组 5/5、B 组 5/5 均已落地。**当前无「会静默给错结�
 - **C 组（需负责人决策）**：C1 信任边界 opt-in · C2 记忆蒸馏限频。
 
 **评审方建议的下一阶段顺序**（**重点从「修 bug」转向「补回归保护」**）：
+**详细的可执行清单见 [ACTIONS.md §7 · 阶段 2](ACTIONS.md)**（含每条用例该断言什么、
+以及已核实的审批与退出码契约）。概览：
 
-1. **审批与退出码的 E2E 测试**（最高优先）。当前 `--yes`、`y`/`a`/拒绝、`--allow` 实际
-   放行、exit 1、`--cwd`、abort **全部零覆盖**，而 README 自述「bash 未沙箱化，审批是
-   唯一防线」、退出码表被 STABILITY 列为 Semver 契约。**契约性行为没有回归保护**——
-   这是当前唯一的结构性缺口，也是 9.8 → 9.9 的唯一路径。
-2. **清理空转与不隔离的测试**：`no_color_output_has_no_escapes` 在 `Command::output()`
-   下恒真；`rsagent()` 构造器不清 `RSAGENT_USER_CONFIG`，开发机有 user config 时断言会红。
-3. **CI 加固**：`permissions: contents: read`、actions 按 SHA 固定、`cargo-deny`/`cargo-audit`。
-4. **M6 路径基准**（`--cwd` 与配置文件目录）—— 用户可见的静默行为差异，成本约 0.5 天。
-5. **C 组两条决策**：C1 信任边界 opt-in（倾向「只读命令不启动进程」）、C2 记忆蒸馏限频。
+1. **D1 · 审批行为的 E2E 覆盖**（最高优先）。当前 `--yes`、`y`/`a`/拒绝、`--allow` 实际
+   放行**全部零覆盖**，而 README 自述「bash 未沙箱化，审批是唯一防线」。其中一条用例
+   （`allow_network_permits_a_web_tool`）**专门锁住 A1 的修复**——若有人把 `permission()`
+   改回 `Exec`，它会红。**契约性行为没有回归保护**，这是当前唯一的结构性缺口，也是
+   9.8 → 9.9 的唯一路径。
+2. **D2 · 退出码的 E2E 覆盖**：exit 0/1/2 三档，以及 `--json` 下「失败不改退出码、以 error
+   事件呈现」这一已写进 README 的承诺。
+3. **D3 · 修掉空转与不隔离的测试**：`no_color_output_has_no_escapes` 恒真；`rsagent()`
+   构造器不清 `RSAGENT_USER_CONFIG`、不设 `current_dir`。
+4. **D4 · CI 加固**：`permissions: contents: read`、actions 按 SHA 固定、`cargo-deny`。
+5. **D5 · M6 路径基准**（`--cwd` 与配置文件目录）—— 用户可见的静默行为差异，约 0.5 天。
+6. **D6 · C 组两条决策**：C1 信任边界 opt-in（倾向「只读命令不启动进程」）、
+   C2 记忆蒸馏限频（倾向「每 5 轮最多一条」）。
 
 **A/B 组收尾评价**：十项修复全部按建议落地，且多次**超出建议**（B2 精确到 `429|5xx`
 而非「非 2xx」；B3 抓住 `.read_timeout` 与 `.timeout` 的区别；A4 用 `thinking_open`

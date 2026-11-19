@@ -579,6 +579,13 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
   全量复评并更新本文件；若相同，只做轻量健康检查（门禁 + 是否有新提交）。
 - **输出**：每次复评更新 `docs/REVIEW.md`（结论与评分）与本文件的 §1、§2（条目状态）。
 - **基线记录**：本文件每次复评后在 §6 追加一行。
+- **不重复空跑**：若本次 `HEAD` 与**上一次检查时的 HEAD 完全相同**（不只是代码基线相同），
+  则上一次的测试结果对同一提交仍然成立，**不必重跑**——只需确认工作区干净并汇报即可。
+  同一提交上反复跑同一套测试不产生任何新信息。（2026-11-19 20:19–21:19 连续三轮
+  `HEAD` 均为 `2298a8c`，第 3 次起即适用本条。）
+- **停滞提醒**：若连续 **≥3 轮**无代码改动，评审方应在汇报中**明确提示项目停滞**，
+  并列出待决策项（§2 的 C 组）与下一阶段建议（§7），供项目负责人决定是给执行方新目标、
+  还是降低复评频率。
 
 ---
 
@@ -688,3 +695,101 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 **评审方低优先级观察（非缺陷，不要求修）**：探测 deadline 等于 `cooldown`（默认 60s），
 因此一个**合法但慢于 60s** 的探测可能被判为废弃并再武装。工具调用通常自带超时且远短于
 60s，实际影响可忽略；若将来出现长探测场景，可考虑独立的 `probe_timeout`。
+
+---
+
+## 7. 阶段 2 · 回归保护（建议下一阶段）
+
+> **为什么是现在**：A 组 5/5、B 组 5/5 已完成，「会静默给错结果」与「会永久卡住」两类
+> 缺陷已清空（评分 9.8）。**代码可靠性维度已接近满分**，当前唯一的结构性缺口是
+> **契约性行为没有回归保护**——README 自述「bash 未沙箱化，审批是唯一防线」，而
+> [STABILITY.md](../STABILITY.md) 把「CLI flags and exit codes」列为 Semver 契约。
+>
+> **本节不改变已完成的 A/B 组结论**，只是把下一阶段拆成可直接执行的任务。
+
+### D1 · 审批行为的 E2E 覆盖（最高优先）
+
+**现状**：`crates/rsagent/tests/cli.rs` 已有 52 个测试，但**没有一个**覆盖审批。
+审批是「bash 不沙箱化」这一安全模型下的**唯一防线**，却没有回归保护。
+
+**已核实的行为契约**（写测试前先确认这些就是「正确」）：
+
+| 场景 | 期望行为 | 依据 |
+| --- | --- | --- |
+| `--print` + 变更类工具，无 `--yes` | **拒绝**（不询问），并提示 `pass --yes or --allow <category>` | `main.rs:604-605`「one-shot `--print` denies them unless `--yes` is given, so automation is never surprised」 |
+| 非交互 stdin + 无 `--yes` | **拒绝一切** | `main.rs:1123`「Deny everything (non-interactive without `--yes`)」 |
+| `--yes` | 全部放行 | `main.rs:127` |
+| `--allow write` | 只放行 `write`，其余仍拒绝/询问 | `main.rs:1131-1142` |
+| `--allow network` | 放行 `network`（**修 A1 后** `web`/`mcp-http` 属此类） | A1 `cf67bf8` |
+| 交互输入 `y` / `yes` | 放行**本次** | `main.rs:1185` |
+| 交互输入 `a` | 放行本次并**记住**（后续不再问） | `main.rs:1186-1187` |
+| 交互输入其他/回车 | 拒绝 | `main.rs:1185` 的匹配之外 |
+| `--allow <未知类别>` | `exit 2`，并列出合法类别 | `main.rs:1127` |
+| 被拒绝的工具 | 以 `ToolExecutionEnd { is_error: true }` 形式回到模型，**不中断 turn** | 需读 `agent.rs` 确认 |
+
+**建议的测试用例**（每条一个 `#[test]`，用 `--faux` 驱动、`--print` 收尾）：
+
+1. `print_without_yes_denies_a_write` —— 让 faux 请求 `write_file`，断言：文件**未**被创建，
+   且 stdout/stderr 含 `skipped`/`approval required`。
+2. `print_with_yes_runs_a_write` —— 同上但加 `--yes`，断言文件**被**创建。
+3. `allow_write_permits_write_but_not_bash` —— `--allow write`，faux 先请求 `bash` 再请求
+   `write_file`；断言 `bash` 被拒、`write_file` 成功。
+4. `allow_network_permits_a_web_tool` —— 这条**专门锁住 A1 的修复**：`--allow network`
+   必须放行 `web` 来源的工具。若有人把 `permission()` 改回 `Exec`，这条会红。
+5. `an_unknown_allow_category_exits_2` —— 断言退出码 `2` 且消息含合法类别列表。
+6. `interactive_a_remembers_the_decision` —— 用 `stdin` 管道喂 `a\n`，断言后续同类调用
+   不再产生 `ToolApprovalRequest` 事件（用 `--json` + `--log` 断言事件流更可靠）。
+
+**注意**：`--print` 下审批**不询问**而是直接拒绝，所以用例 1/3/4 不需要喂 stdin；
+用例 6 需要交互，建议用 `--json` 断言事件流而不是解析终端文本。
+
+### D2 · 退出码的 E2E 覆盖
+
+**契约**（README「Exit codes」节，STABILITY 列为 Semver）：
+
+| 码 | 含义 | 建议用例 |
+| --- | --- | --- |
+| `0` | 运行完成且模型给出了答案 | `faux_print_runs_a_turn_end_to_end`（**已存在**） |
+| `1` | 运行时的模型级失败（网络/提供商错误）**或**触到 turn 上限 | `a_model_error_exits_1`（faux 返回错误）；`hitting_max_turns_exits_1`（`--max-turns 1` + 需要工具的 prompt） |
+| `2` | 运行**之前**的用法/配置错误 | `missing_api_key_exits_2`（不带 `--faux` 且无 key）；`a_bad_log_path_exits_2`；`unknown_flag_exits_2`（clap 自带，可省） |
+
+**额外值得锁的两条**（评审方在 §6 记过、但未列为缺陷）：
+
+- `abort` 在 `--print` 下的退出码：当前行为需先确认，**确认后再写测试锁住**（不要先写测试
+  去「修正」一个未定行为）。
+- `--json` 模式下失败**不改变退出码语义**，而是以 `error` 事件呈现——README 明确承诺
+  「`--json` keeps its machine contract」，应有一条测试断言这一点。
+
+### D3 · 修掉空转与不隔离的测试（低成本，可顺手做）
+
+- `no_color_output_has_no_escapes`：在 `Command::output()` 下 stdout 本就不是 TTY，
+  `Palette` 早已关闭，**删掉 `--no-color` 也会通过**。应改为直接断言 `NO_COLOR` 环境变量
+  的行为，或构造一个伪 TTY。
+- `rsagent()` 构造器（`tests/cli.rs:9-11`）**不设 `current_dir`、不清 `RSAGENT_USER_CONFIG`**，
+  多个测试会从仓库根加载 `.env`；开发机上一旦有 user config，`tools list` 断言就会红。
+  建议：构造器统一 `current_dir` 到临时目录，并显式 `env_remove("RSAGENT_USER_CONFIG")`。
+- `mcp-stdio` 示例缺失时测试**静默 `return`**，仍算通过。应显式 skip（如打印原因并
+  `return` 前断言文件存在）或先构建 examples。
+
+### D4 · CI 加固（低成本）
+
+- 给 workflow 加 `permissions: contents: read`（最小权限）。
+- actions 按 commit SHA 固定（防供应链）。
+- 加 `cargo-deny` / `cargo-audit` job。
+
+### D5 · M6 路径基准（用户可见的静默差异）
+
+配置里的相对路径按**进程 cwd** 解析，而不是配置文件目录或 `--cwd`。在 `repo/sub` 下运行
+`path = "./skills/team"` 会找错目录并**被静默跳过**。建议以配置文件所在目录为基准，并写进
+README。成本约 0.5 天。
+
+### D6 · C 组两条决策（需项目负责人拍板）
+
+见 §2 的 C1（信任边界 opt-in）与 C2（记忆蒸馏限频）。**评审方倾向**：C1 做「只读命令不
+启动进程」；C2 做「每 5 轮最多一条蒸馏笔记」。
+
+---
+
+**评审方对阶段 2 的总评**：**D1 是唯一真正重要的一项**——它保护的是「审批是唯一防线」
+这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。D3/D4 是低成本清理。
+D5 是用户可见的行为修正。D6 需要你决策。**建议按 D1 → D2 → D3/D4 → D5 → D6 推进。**
