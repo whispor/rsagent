@@ -797,6 +797,9 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 > 结论：下面三项**确实都还没有**，建议成立；另发现**两个新的加固点**（4、5）。
 > 同时确认 CI 与 AGENTS.md 的四道门禁**完全对齐**（`check` 三平台跑 fmt/clippy/test，
 > `docs` 跑 `-D warnings` 的 rustdoc，`msrv` 在 1.95.0 上 `cargo check`），这部分无需改动。
+>
+> **2026-11-20 07:19 补充**：实测四个被 README 宣传为「可运行」的 example，**全部 `exit 0`
+> 且输出合理**——承诺成立。但 CI 只编译不执行它们，故新增第 6 条。
 
 - **状态**：待办 · **成本**：约 0.5 天
 - **已有且正确、不要动的部分**：三平台矩阵（`fail-fast: false`）、`--locked` 全程、
@@ -817,6 +820,13 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 5. **🆕 加 `concurrency` 组**（`group: ${{ github.workflow }}-${{ github.ref }}` +
    `cancel-in-progress: true`）。当前连推两次 main 会并行跑两套三平台矩阵，前一套的结果
    已无意义却仍占额度。
+6. **🆕 在 CI 里真正运行 `examples/`**。README 把 4 个 example 宣传为「可直接运行」的
+   入口（`headless`、`custom_tool`、`custom_provider`、`end_to_end`），但 CI **只编译
+   它们**（`clippy --all-targets`），**从不执行**——运行期回归不会被发现。
+   **评审方 2026-11-20 07:19 实测：四个 example 当前全部 `exit 0` 且输出合理**
+   （`answer: Hello from a headless agent!` / `word_count -> 4` / `echo: pong` /
+   `end_to_end` 完整事件流），所以**承诺现在成立**；本条是为了让它**继续**成立。
+   加一个 job 跑这四条命令即可（离线、无需 API key、几秒钟）。
 
 **验收**：改完后 `git push` 一次，确认 5 个 job 仍全绿（`ubuntu` / `macos` / `windows` /
 `Docs` / `MSRV`），且 workflow 文件里能搜到 `permissions:`、`timeout-minutes:`、
