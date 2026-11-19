@@ -78,6 +78,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **`read_file` no longer strips `\r`, so editing a CRLF file works.** The reader kept the
+  `\r` out of its output while `edit_file` matched byte-for-byte, so reading a Windows file
+  and pasting a line back as `old_string` always failed with `old_string not found`. The
+  reader now returns each line exactly as it is on disk.
 - **The circuit breaker can no longer be closed by a stale success, or wedge half-open.**
   A `record_success` now only resets a `Closed` or `HalfOpen` breaker; a late success from
   a request issued before the trip is ignored, so a concurrent source cannot re-open the

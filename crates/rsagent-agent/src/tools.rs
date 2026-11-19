@@ -154,7 +154,14 @@ impl Tool for ReadFileTool {
             .await
             .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
 
-        let lines: Vec<&str> = data.lines().collect();
+        // Split on `\n` but keep any `\r`, so the returned text is byte-for-byte the
+        // file's lines. `str::lines()` would strip the `\r`, and then a model that reads a
+        // CRLF file and pastes a line back into `edit_file` (an exact-match tool) would
+        // always miss (ACTIONS.md A3).
+        let lines: Vec<&str> = data
+            .split_inclusive('\n')
+            .map(|line| line.strip_suffix('\n').unwrap_or(line))
+            .collect();
         let total = lines.len();
         if total == 0 {
             return Ok(ToolResult::text(format!(

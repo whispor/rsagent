@@ -866,6 +866,54 @@ async fn edit_file_replaces_a_unique_match() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[tokio::test]
+async fn read_file_output_edits_a_crlf_file() {
+    // On a Windows checkout the file has `\r\n` endings. A model that reads a line and
+    // pastes it back into `edit_file` must not be defeated by the `\r` `read_file` used
+    // to strip (ACTIONS.md A3).
+    let dir = temp_dir("crlf-edit-it");
+    std::fs::write(dir.join("f.txt"), "alpha\r\nbeta\r\ngamma\r\n").expect("write file");
+    let path = dir.join("f.txt").to_string_lossy().into_owned();
+
+    // Read the file and take the `beta` line's text exactly as `read_file` rendered it.
+    let (mut reader, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![("read_file", json!({ "path": path }))]),
+            FauxResponse::text("done"),
+        ],
+    );
+    reader.prompt("read").await.expect("prompt completes");
+    let rendered = tool_result_text(&reader, "read_file");
+    let fragment = rendered
+        .split('\n')
+        .find_map(|line| line.strip_prefix("2\t"))
+        .expect("the beta line is rendered");
+
+    // Feed that fragment straight back as `old_string`: the edit must succeed.
+    let (mut editor, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "edit_file",
+                json!({ "path": path, "old_string": fragment, "new_string": "BETA\r" }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
+    editor.prompt("edit").await.expect("prompt completes");
+
+    let result = tool_result_text(&editor, "edit_file");
+    assert!(result.contains("Replaced 1 occurrence"), "got: {result}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("f.txt")).expect("read file"),
+        "alpha\r\nBETA\r\ngamma\r\n",
+        "the CRLF endings survive the edit"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A provider that records the last request's [`Context`] and replies with fixed text.
 struct CapturingProvider {
     last: Arc<Mutex<Option<Context>>>,
