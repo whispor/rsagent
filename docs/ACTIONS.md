@@ -444,7 +444,7 @@ B3 消除了「接受连接后停发字节 → 永久卡住」）。
 
 #### B5 · 流内错误与 `finish_reason` 的处理
 
-- **状态**：待办
+- **状态**：已完成 (68f7a8a)
 - **成本**：约 1 天 · **影响**：中
 - **问题**：
   1. 流内出现 `{"error": ...}` 时被忽略（不终止、不报错）；
@@ -454,6 +454,28 @@ B3 消除了「接受连接后停发字节 → 永久卡住」）。
 - **验收**：新增测试：流中插入 error 对象 → 断言事件序列以 `Error` 结束；流被截断但已含
   tool call → 断言不会静默当成功。
 - **关联**：M3。
+
+```
+- 状态：已完成 (68f7a8a)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 267 通过 / 0 失败（较上轮 +3）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：an_error_object_in_the_stream_ends_it、
+    a_truncated_stream_with_a_tool_call_is_not_a_silent_success、
+    a_stream_with_no_finish_reason_and_no_tool_call_still_stops
+- 实现：
+  - `OpenAiStreamParser` 增 `model`（用于构造 error 消息）与 `failed` 两个字段。
+  - `handle_chunk` 开头：`failed` 时直接返回空；遇 `value.get("error")` → 置 `failed`，
+    取 `message`（缺省 `"provider error"`），返回终结 `StreamEvent::Error`。
+  - `finish` 开头：`failed` 时返回空（不再补发成功 `Done`，避免「末事件即成功」误读）。
+  - `finish` 收尾前：若 `finish_reason` 缺失**且**已含 tool call → 判为异常截断，返回
+    `StreamEvent::Error`，不默认 `Stop`（避免静默丢弃已解析的 tool call）。
+  - 纯文本流缺 `finish_reason` 仍按 `Stop` 收尾（合法形状，见第三个测试）。
+- 与 H1 在 Anthropic 的修法一致（同用 `failed` 短路）；未新增依赖、未新造抽象。
+- 文档同步：CHANGELOG.md
+```
 
 ---
 
