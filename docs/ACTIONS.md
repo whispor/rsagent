@@ -321,7 +321,7 @@
 
 #### B2 · `mcp-http` 先按 HTTP 状态码分类，再看 body
 
-- **状态**：待办
+- **状态**：已完成 (792a768)
 - **成本**：约 0.5 天 · **影响**：中
 - **问题（已验证）**：`mcp_http.rs:201-243` 先读 body、再解析，**非 2xx 的 body 若带
   JSON-RPC `error`** 会被判成 `CallError::Protocol` → 调用方 `record_success()` →
@@ -335,6 +335,21 @@
 - **验收**：新增测试：mock 返回 `429` + JSON-RPC error body → 断言 `record_failure` 路径
   被走到（熔断器计数增加）；返回 `400` + error body → 断言仍是业务失败不熔断。
 - **关联**：M8、D9。
+
+```
+- 状态：已完成 (792a768)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 260 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：a_gateway_failure_trips_the_breaker_even_with_a_json_rpc_error_body、
+    a_bad_request_stays_a_business_failure
+- 实现：`exchange()` 读完 body 后、解析前先判状态——`status == 429 || status.is_server_error()`
+  → `CallError::Transport`（body 仅诊断）；其余（2xx / 其它 4xx）仍走 body 解析。
+- 采用评审方推荐的折中：只把 **429 / 5xx** 判连接类，4xx 仍判业务失败。
+- 文档同步：CHANGELOG.md、模块级 Failure classes 段
+```
 
 ---
 
