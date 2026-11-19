@@ -178,10 +178,56 @@ struct Cli {
     command: Option<tools::Command>,
 }
 
+/// Environment variables an auto-discovered `.env` must never set.
+///
+/// `RSAGENT_BASE_URL` redirects where the model request — and the user's real API key — is
+/// sent; `RSAGENT_USER_CONFIG` points the user-level config at a file the repo controls.
+/// A `.env` that arrived with a `git clone` is untrusted input, so these two are refused:
+/// they are only honored from the real environment, never from a project file.
+const PROTECTED_ENV: &[&str] = &["RSAGENT_BASE_URL", "RSAGENT_USER_CONFIG"];
+
+/// The protected variables to drop: names absent before loading `.env` but present after.
+///
+/// A variable already set in the real environment is left alone — `dotenvy` never overrides
+/// it — so only values a `.env` *introduced* are dropped.
+fn dropped_protected_vars(
+    was_set: &dyn Fn(&str) -> bool,
+    is_set: &dyn Fn(&str) -> bool,
+) -> Vec<&'static str> {
+    PROTECTED_ENV
+        .iter()
+        .copied()
+        .filter(|name| !was_set(name) && is_set(name))
+        .collect()
+}
+
+/// Load `.env` (from the working directory upward) without letting it set the
+/// security-sensitive variables in [`PROTECTED_ENV`].
+fn load_dotenv() {
+    let was_set = |name: &str| std::env::var_os(name).is_some();
+    let before: Vec<&str> = PROTECTED_ENV
+        .iter()
+        .copied()
+        .filter(|n| was_set(n))
+        .collect();
+
+    let _ = dotenvy::dotenv();
+
+    let is_set = |name: &str| std::env::var_os(name).is_some();
+    for name in dropped_protected_vars(&|n| before.contains(&n), &is_set) {
+        std::env::remove_var(name);
+        eprintln!(
+            "· ignoring `{name}` from .env: it can redirect where your credentials are sent, \
+             so it is read only from the environment, never a project file"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load `.env` before parsing so clap's `env = ...` attributes see it.
-    let _ = dotenvy::dotenv();
+    // Load `.env` before parsing so clap's `env = ...` attributes see it — but never let a
+    // project `.env` set a credential-redirecting variable (see `load_dotenv`).
+    load_dotenv();
 
     let cli = Cli::parse();
     let color = if cli.no_color {
@@ -1146,3 +1192,28 @@ impl Approver for CliApprover {
 }
 
 // The event renderer and its presentation helpers live in `render.rs`.
+
+#[cfg(test)]
+mod tests {
+    use super::dropped_protected_vars;
+
+    #[test]
+    fn a_dotenv_may_not_introduce_a_protected_variable() {
+        // Set in the real environment before `.env` loaded: dotenvy leaves it, so it is
+        // kept. Absent before but present after: the `.env` introduced it, so it is dropped.
+        let dropped = dropped_protected_vars(&|name| name == "RSAGENT_BASE_URL", &|_| true);
+        assert_eq!(dropped, vec!["RSAGENT_USER_CONFIG"]);
+    }
+
+    #[test]
+    fn nothing_is_dropped_when_the_environment_already_set_the_variable() {
+        let dropped = dropped_protected_vars(&|_| true, &|_| true);
+        assert_eq!(dropped, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn nothing_is_dropped_when_dotenv_adds_nothing() {
+        let dropped = dropped_protected_vars(&|_| false, &|_| false);
+        assert_eq!(dropped, Vec::<&str>::new());
+    }
+}

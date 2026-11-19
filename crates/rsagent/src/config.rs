@@ -4,6 +4,15 @@
 //! **CLI flags > environment > this file > built-in defaults**
 //! (`docs/EXTENSIBILITY.md` §3.3). A missing file simply means "no configuration"; a file
 //! that exists but does not parse is reported, never silently ignored.
+//!
+//! # Trust boundary
+//!
+//! A project `rsagent.toml` is **executable input**: a `local`, `mcp-stdio`, or `skill`
+//! source spawns a program from it, and `build_catalog` does so while assembling the tool
+//! set — before any approval prompt. Running rsagent in an untrusted repository therefore
+//! runs whatever that repository declares. The same applies to an auto-discovered `.env`,
+//! which is why the credential-redirecting variables (`RSAGENT_BASE_URL`,
+//! `RSAGENT_USER_CONFIG`) are refused there (see `load_dotenv` in `main.rs`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
