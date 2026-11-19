@@ -78,6 +78,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **The circuit breaker can no longer be closed by a stale success, or wedge half-open.**
+  A `record_success` now only resets a `Closed` or `HalfOpen` breaker; a late success from
+  a request issued before the trip is ignored, so a concurrent source cannot re-open the
+  gate the breaker just shut. And a half-open probe whose future is dropped now returns the
+  breaker to `Open` after one cooldown (instead of staying half-open forever), so a source
+  that failed a probe can still heal.
 - **Non-built-in tools now declare their real `Permission` category.** The `web`,
   `mcp-http`, and `mcp-stdio` tools were falling back to the default `exec` category, so
   `--allow network` could not let them through while `--allow exec` silently auto-approved

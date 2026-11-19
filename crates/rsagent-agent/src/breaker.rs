@@ -75,6 +75,12 @@ struct Inner {
     failures: u32,
     cooldown: Duration,
     opened_at: Option<Instant>,
+    /// When the in-flight half-open probe was granted, if one is outstanding.
+    ///
+    /// Used to bound how long a probe may take: a probe whose future is dropped (a
+    /// cancelled turn, an aborted task) would otherwise wedge the breaker in `HalfOpen`
+    /// forever, because only an outcome leaves that state.
+    probe_started_at: Option<Instant>,
 }
 
 /// A circuit breaker guarding one [`ToolSource`](crate::ToolSource).
@@ -96,6 +102,7 @@ impl CircuitBreaker {
                 failures: 0,
                 cooldown: policy.base_cooldown,
                 opened_at: None,
+                probe_started_at: None,
             }),
         }
     }
@@ -120,19 +127,31 @@ impl CircuitBreaker {
     /// probe*: the next call is let through and every call after it is refused until the
     /// probe reports back with [`record_success`](Self::record_success) or
     /// [`record_failure`](Self::record_failure).
+    ///
+    /// A probe that never reports back is not allowed to wedge the breaker: once the
+    /// probe window (one cooldown) has elapsed with no outcome, the breaker returns to
+    /// [`Open`](BreakerState::Open) with a fresh cooldown, so the source can be probed
+    /// again instead of staying unusable forever.
     pub fn allows(&self, now: Instant) -> bool {
         let mut inner = self.lock();
         match inner.state {
             BreakerState::Closed => true,
-            // A probe is already in flight; wait for its outcome.
-            BreakerState::HalfOpen => false,
+            BreakerState::HalfOpen => {
+                if elapsed_since(inner.probe_started_at, now) >= inner.cooldown {
+                    // The probe was abandoned (its future dropped). Re-arm so the source
+                    // heals after another cooldown rather than staying half-open forever.
+                    inner.state = BreakerState::Open;
+                    inner.opened_at = Some(now);
+                    inner.probe_started_at = None;
+                }
+                // Either way no call passes now: a probe is in flight, or just expired.
+                false
+            }
             BreakerState::Open => {
-                let elapsed = inner
-                    .opened_at
-                    .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
-                if elapsed >= inner.cooldown {
+                if elapsed_since(inner.opened_at, now) >= inner.cooldown {
                     // Cooldown is over: consume the probe and let this one call through.
                     inner.state = BreakerState::HalfOpen;
+                    inner.probe_started_at = Some(now);
                     true
                 } else {
                     false
@@ -142,12 +161,18 @@ impl CircuitBreaker {
     }
 
     /// Record a successful round-trip: the source is reachable again.
+    ///
+    /// A success only resets a breaker that is [`Closed`](BreakerState::Closed) or
+    /// [`HalfOpen`](BreakerState::HalfOpen). When the breaker is already
+    /// [`Open`](BreakerState::Open) the success belongs to a request issued *before* the
+    /// trip (a concurrent source's late reply); honouring it would close a breaker that
+    /// just tripped and defeat the isolation.
     pub fn record_success(&self) {
         let mut inner = self.lock();
-        inner.state = BreakerState::Closed;
-        inner.failures = 0;
-        inner.cooldown = self.policy.base_cooldown;
-        inner.opened_at = None;
+        match inner.state {
+            BreakerState::Closed | BreakerState::HalfOpen => close(&mut inner, self.policy),
+            BreakerState::Open => {}
+        }
     }
 
     /// Record a connection-class failure at `now`.
@@ -161,6 +186,7 @@ impl CircuitBreaker {
                 inner.cooldown = (inner.cooldown * 2).min(self.policy.max_cooldown);
                 inner.state = BreakerState::Open;
                 inner.opened_at = Some(now);
+                inner.probe_started_at = None;
             }
             // Already open: refresh the window so the cooldown starts from the last failure.
             BreakerState::Open => {
@@ -191,7 +217,8 @@ impl CircuitBreaker {
 
     /// Force the breaker [`Closed`](BreakerState::Closed) — the manual reset.
     pub fn reset(&self) {
-        self.record_success();
+        let mut inner = self.lock();
+        close(&mut inner, self.policy);
     }
 
     /// Snapshot the breaker as a serializable [`BreakerReport`].
@@ -236,6 +263,7 @@ impl CircuitBreaker {
                 inner.state = BreakerState::Open;
             }
         }
+        inner.probe_started_at = None;
     }
 
     /// Lock the mutex, treating poisoning as "the state is still usable".
@@ -253,17 +281,37 @@ impl CircuitBreaker {
 fn effective(inner: &Inner, now: Instant) -> BreakerState {
     match inner.state {
         BreakerState::Open => {
-            let elapsed = inner
-                .opened_at
-                .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
-            if elapsed >= inner.cooldown {
+            if elapsed_since(inner.opened_at, now) >= inner.cooldown {
                 BreakerState::HalfOpen
             } else {
                 BreakerState::Open
             }
         }
-        other => other,
+        // A probe that never reported back stops counting as half-open once its window
+        // elapses; `allows` then re-opens the breaker on the next call.
+        BreakerState::HalfOpen => {
+            if elapsed_since(inner.probe_started_at, now) >= inner.cooldown {
+                BreakerState::Open
+            } else {
+                BreakerState::HalfOpen
+            }
+        }
+        BreakerState::Closed => BreakerState::Closed,
     }
+}
+
+/// How long has passed since `at`, or zero when `at` is `None`.
+fn elapsed_since(at: Option<Instant>, now: Instant) -> Duration {
+    at.map_or(Duration::ZERO, |at| now.saturating_duration_since(at))
+}
+
+/// Force `inner` back to a healthy [`Closed`](BreakerState::Closed) state.
+fn close(inner: &mut Inner, policy: BreakerPolicy) {
+    inner.state = BreakerState::Closed;
+    inner.failures = 0;
+    inner.cooldown = policy.base_cooldown;
+    inner.opened_at = None;
+    inner.probe_started_at = None;
 }
 
 /// Wall-clock seconds since the Unix epoch, for persisted reports and memory timestamps.
@@ -467,5 +515,45 @@ mod tests {
         });
         assert_eq!(breaker.state(Instant::now()), BreakerState::Closed);
         assert!(breaker.allows(Instant::now()));
+    }
+
+    #[test]
+    fn a_late_success_does_not_close_an_open_breaker() {
+        // A concurrent source can deliver a success for a request issued before the trip.
+        // Honouring it would close a breaker that just opened and defeat the isolation.
+        let breaker = CircuitBreaker::new(policy());
+        let now = Instant::now();
+        for _ in 0..3 {
+            breaker.record_failure(now);
+        }
+        assert_eq!(breaker.state(now), BreakerState::Open);
+
+        breaker.record_success();
+        assert_eq!(breaker.state(now), BreakerState::Open, "the trip stands");
+        assert!(!breaker.allows(now));
+    }
+
+    #[test]
+    fn a_dropped_probe_returns_the_breaker_to_open() {
+        // A half-open probe whose future is dropped never reports back. Without a
+        // deadline the breaker would stay half-open forever and refuse every call.
+        let breaker = CircuitBreaker::new(policy());
+        let start = Instant::now();
+        for _ in 0..3 {
+            breaker.record_failure(start);
+        }
+
+        // Cooldown elapses; the probe is granted but its future is dropped.
+        let probe_at = start + Duration::from_secs(60);
+        assert!(breaker.allows(probe_at));
+
+        // The probe window (one cooldown) expires with no outcome: back to open.
+        let after_probe = probe_at + Duration::from_secs(60);
+        assert_eq!(breaker.state(after_probe), BreakerState::Open);
+        assert!(!breaker.allows(after_probe), "still cooling down");
+
+        // Once the fresh cooldown elapses, the source gets another chance to heal.
+        let retry_at = after_probe + Duration::from_secs(60);
+        assert!(breaker.allows(retry_at), "the source can be probed again");
     }
 }
