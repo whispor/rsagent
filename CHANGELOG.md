@@ -81,6 +81,11 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **Provider retries respect `Retry-After`, jitter the delay, and skip `409`.** The backoff
+  ignored the server's `Retry-After` (both the delta-seconds and HTTP-date forms), used a
+  fixed schedule that let many clients retry in lockstep, and treated `409 Conflict` as
+  transient. A retry now waits at least as long as the server asks (clamped to a minute) and
+  jitters the delay within the backoff window; a `409` is no longer retried.
 - **A stalled provider stream now fails instead of hanging the turn.** Only the *connect*
   phase was bounded, so a server that accepted the request and then went silent (a half-open
   connection, a gateway that stops sending) left the stream waiting forever. The HTTP client
