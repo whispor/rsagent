@@ -22,10 +22,12 @@
 //! # Failure classes
 //!
 //! The same split as [`mcp-stdio`](super::mcp_stdio): a **transport** failure — the
-//! endpoint is unreachable, a request times out, the status is not a success and the body
-//! carries no JSON-RPC error, or the body does not parse — is connection-class and trips
-//! the circuit breaker. A well-formed JSON-RPC `error`, or a `tools/call` result with
-//! `"isError": true`, is a protocol/business failure that leaves the breaker closed.
+//! endpoint is unreachable, a request times out, a 429 or 5xx status (a gateway failure,
+//! whatever the body says), a non-success status whose body carries no JSON-RPC error, or
+//! a body that does not parse — is connection-class and trips the circuit breaker. A
+//! well-formed JSON-RPC `error` on a 2xx (or on a 4xx the request itself caused), or a
+//! `tools/call` result with `"isError": true`, is a protocol/business failure that leaves
+//! the breaker closed.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -232,6 +234,19 @@ impl Connection {
                 ))
             })?
             .map_err(|error| CallError::Transport(format!("cannot read the response: {error}")))?;
+
+        // Classify by HTTP status before looking at the body. A gateway failure (429, or
+        // any 5xx) means the endpoint cannot serve right now — connection-class, so it
+        // feeds the breaker even when the body happens to carry a well-formed JSON-RPC
+        // `error` (which would otherwise read as a business failure and keep the breaker
+        // closed, defeating isolation during an outage). A 4xx the request itself caused
+        // still flows through to the body, so a genuine JSON-RPC error stays a business
+        // failure rather than being mistaken for an outage.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return Err(CallError::Transport(format!(
+                "the MCP endpoint returned HTTP {status}"
+            )));
+        }
 
         // An empty body is a notification acknowledgement (typically `202 Accepted`).
         if body.trim().is_empty() {
@@ -957,6 +972,68 @@ mod tests {
             .expect_err("the server refused the call");
         assert!(error.contains("invalid params"), "{error}");
         assert_eq!(source.health(), SourceHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn a_gateway_failure_trips_the_breaker_even_with_a_json_rpc_error_body() {
+        // A 429 is the endpoint unable to serve, not the server rejecting the call: it must
+        // feed the breaker even though the body carries a well-formed JSON-RPC error.
+        let source = source_over(|request| match request.method().as_deref() {
+            Some("initialize") => request.reply(json!({ "protocolVersion": "2025-06-18" })),
+            Some("notifications/initialized") => accepted(),
+            Some("tools/list") => request.reply(json!({ "tools": [tool_json("echo")] })),
+            // The gateway answers 429 with a JSON-RPC error body.
+            _ => request.reply_error(-32000, "slow down").status(429),
+        })
+        .await
+        .with_breaker_policy(BreakerPolicy {
+            threshold: 1,
+            base_cooldown: Duration::from_secs(60),
+            max_cooldown: Duration::from_secs(600),
+        });
+
+        let tools = source.tools();
+        let context = ToolContext::new(".");
+        let error = tools[0]
+            .execute("call", json!({}), &context)
+            .await
+            .expect_err("a 429 is a transport failure");
+        assert!(error.contains("HTTP 429"), "{error}");
+
+        // The breaker is now open: the next call is refused before touching the transport.
+        let error = tools[0]
+            .execute("call", json!({}), &context)
+            .await
+            .expect_err("an open breaker refuses the call");
+        assert!(error.contains("circuit open"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_bad_request_stays_a_business_failure() {
+        // A 4xx the request itself caused is the server refusing the call, not a gateway
+        // failure: it must not trip the breaker.
+        let source = source_over(|request| match request.method().as_deref() {
+            Some("initialize") => request.reply(json!({ "protocolVersion": "2025-06-18" })),
+            Some("notifications/initialized") => accepted(),
+            Some("tools/list") => request.reply(json!({ "tools": [tool_json("echo")] })),
+            _ => request.reply_error(-32602, "invalid params").status(400),
+        })
+        .await;
+
+        let tools = source.tools();
+        let context = ToolContext::new(".");
+        for _ in 0..3 {
+            let error = tools[0]
+                .execute("call", json!({}), &context)
+                .await
+                .expect_err("the server refused the call");
+            assert!(error.contains("invalid params"), "{error}");
+        }
+        assert_eq!(
+            source.health(),
+            SourceHealth::Healthy,
+            "a 400 must not trip the breaker"
+        );
     }
 
     #[tokio::test]

@@ -81,6 +81,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **`mcp-http` treats a 429 or 5xx as an outage, not a business failure.** The transport
+  parsed the body first, so a gateway error that carried a JSON-RPC `error` (a common shape
+  for a rate-limited or overloaded endpoint) was read as the server refusing the call — the
+  breaker stayed closed and the source was never isolated during an outage. A 429 or 5xx now
+  trips the breaker regardless of the body; a 4xx the request itself caused still reads as a
+  business failure.
 - **MCP replies are matched by direction, and `tools/list` pagination is bounded.** Both
   transports matched a response by `id` alone, but a server→client *request* also carries an
   `id`; a same-id request was taken as the answer and read as a silent empty success. A reply
