@@ -1338,7 +1338,64 @@ fn tools_doctor_fails_on_an_unloadable_source() {
     assert!(stdout.contains("broken"), "stdout: {stdout}");
     assert!(stdout.contains("检查"), "a fix hint is expected: {stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("个来源有问题"), "stderr: {stderr}");
+    assert!(stderr.contains("个问题"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_doctor_fails_on_a_broken_config() {
+    // A `rsagent.toml` that cannot be parsed is a problem, not a footnote: the gate must
+    // fail instead of silently falling back to the built-in sources.
+    let dir = temp_dir("tools-doctor-bad-config");
+    std::fs::write(dir.join("rsagent.toml"), "not = valid = toml\n").expect("write bad config");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "doctor"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "doctor must fail on a config it cannot parse"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("配置"),
+        "the config problem must be shown: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tools_doctor_fails_on_an_unhealthy_source() {
+    // A source that loads but reports `Unhealthy` (here a persisted open breaker) is not
+    // usable, so the CI gate must fail.
+    let dir = temp_dir("tools-doctor-unhealthy");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"web\"\nid = \"api\"\nurl = \"https://example.com/api\"\nname = \"call_api\"\n",
+    )
+    .expect("write rsagent.toml");
+    write_open_breaker(&dir, "api");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .args(["tools", "doctor"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        !output.status.success(),
+        "doctor must fail when a source is unhealthy"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("异常"),
+        "the unhealthy source must be shown: {stdout}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -185,8 +185,9 @@ fn breaker_label(state: BreakerState, palette: Palette) -> String {
 ///
 /// # Errors
 ///
-/// Returns a message when at least one source failed to load, so `doctor` can be used as
-/// a CI gate.
+/// Returns a message when the run found any problem — a config file that could not be
+/// read or parsed, a source that failed to load, or a source that reports
+/// [`Unhealthy`](SourceHealth::Unhealthy) — so `doctor` can be used as a CI gate.
 async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
     // Seeding makes a persisted, still-cooling-down source show as unhealthy here too.
     let store = BreakerStore::load(&cli.cwd);
@@ -199,28 +200,30 @@ async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
             println!("配置：{}", path.display());
         }
     }
+    // A file that existed but could not be read or parsed is a problem, not a footnote:
+    // a typo in `rsagent.toml` must fail the gate rather than fall back to the built-ins.
+    let mut problems = layered.warnings.len();
     for warning in &layered.warnings {
-        println!("配置：{warning}");
+        println!("{} 配置：{warning}", palette.red("✗"));
     }
     let config = layered.config;
 
     if config.tools.sources.is_empty() {
         let source = crate::builtin_source(cli, None, palette);
         store.seed_source(&source);
-        report(&source, palette);
+        problems += usize::from(!report(&source, palette));
         print_breakers(&store, palette);
-        return Ok(());
+        return doctor_result(problems);
     }
 
-    let mut failures = 0_usize;
     for spec in &config.tools.sources {
         match crate::build_source(cli, spec, palette).await {
             Ok(source) => {
                 store.seed_source(source.as_ref());
-                report(source.as_ref(), palette);
+                problems += usize::from(!report(source.as_ref(), palette));
             }
             Err(error) => {
-                failures += 1;
+                problems += 1;
                 println!("{} {} [{}]：{error}", palette.red("✗"), spec.id, spec.kind);
                 if let Some(hint) = fix_hint(&spec.kind) {
                     println!("  → {hint}");
@@ -229,19 +232,25 @@ async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
         }
     }
     print_breakers(&store, palette);
-    if failures > 0 {
-        anyhow::bail!("{failures} 个来源有问题");
+    doctor_result(problems)
+}
+
+/// Turn the problems `doctor` found into its exit: any problem fails the gate.
+fn doctor_result(problems: usize) -> anyhow::Result<()> {
+    if problems > 0 {
+        anyhow::bail!("doctor 发现 {problems} 个问题");
     }
     Ok(())
 }
 
-/// Print one healthy source line.
-fn report(source: &dyn ToolSource, palette: Palette) {
-    let health = match source.health() {
-        SourceHealth::Healthy => palette.green("正常"),
-        SourceHealth::Unhealthy(reason) => palette.yellow(&format!("异常（{reason}）")),
-        // `SourceHealth` is `#[non_exhaustive]`: a future variant must not break this.
-        _ => palette.yellow("未知"),
+/// Print one healthy source line; return whether the source is healthy.
+fn report(source: &dyn ToolSource, palette: Palette) -> bool {
+    let (health, healthy) = match source.health() {
+        SourceHealth::Healthy => (palette.green("正常"), true),
+        SourceHealth::Unhealthy(reason) => (palette.yellow(&format!("异常（{reason}）")), false),
+        // `SourceHealth` is `#[non_exhaustive]`: a future variant must not break this,
+        // and an unknown health is treated as a problem rather than a pass.
+        _ => (palette.yellow("未知"), false),
     };
     println!(
         "{} {} [{}] {} 个工具 · {health}",
@@ -250,6 +259,7 @@ fn report(source: &dyn ToolSource, palette: Palette) {
         source.kind().as_str(),
         source.tools().len()
     );
+    healthy
 }
 
 /// A one-line, kind-specific suggestion for fixing a source that will not load.

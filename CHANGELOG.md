@@ -81,6 +81,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **`rsagent tools doctor` now fails the gate on every problem.** It previously exited `0`
+  for a `rsagent.toml` that could not be parsed (falling back to the built-ins) and for a
+  source that reports `Unhealthy`, so the documented CI gate always passed. It now counts
+  config problems and unhealthy sources and exits non-zero if there are any.
 - **`--print` sends extended reasoning to stderr.** With `--thinking`, the reasoning
   deltas were written to stdout, so `rsagent --print --thinking high "…" > answer.md`
   mixed the reasoning into the answer file. Reasoning now goes to stderr in a one-shot run
