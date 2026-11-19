@@ -116,12 +116,12 @@ impl Provider for OpenAiProvider {
                 };
 
             let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
+            let mut buffer: Vec<u8> = Vec::new();
 
             'stream: while let Some(chunk) = byte_stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        buffer.extend_from_slice(&bytes);
                         while let Some(line) = sse::next_line(&mut buffer) {
                             let SseLine::Data(data) = sse::classify(&line) else {
                                 continue;

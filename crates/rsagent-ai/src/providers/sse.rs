@@ -21,9 +21,16 @@ pub(super) enum SseLine<'a> {
 /// SSE lines end in `\n`; a trailing `\r` from CRLF is stripped. The consumed
 /// bytes are removed from `buffer`, so a caller can loop until this returns
 /// [`None`], which means the buffer holds only a partial line.
-pub(super) fn next_line(buffer: &mut String) -> Option<String> {
-    let newline = buffer.find('\n')?;
-    let line = buffer[..newline].trim_end_matches('\r').to_string();
+///
+/// `buffer` holds raw bytes, not a `String`, and only the bytes up to (and
+/// including) the newline are decoded. A multi-byte UTF-8 character split across
+/// two network chunks therefore stays in `buffer` until its final byte arrives —
+/// decoding a lone continuation byte would corrupt it into U+FFFD.
+pub(super) fn next_line(buffer: &mut Vec<u8>) -> Option<String> {
+    let newline = buffer.iter().position(|&byte| byte == b'\n')?;
+    let line = String::from_utf8_lossy(&buffer[..newline])
+        .trim_end_matches('\r')
+        .to_string();
     buffer.drain(..=newline);
     Some(line)
 }
@@ -47,13 +54,24 @@ mod tests {
 
     #[test]
     fn pulls_lines_out_of_the_buffer_and_strips_crlf() {
-        let mut buffer = String::from("data: a\r\ndata: b\npartial");
+        let mut buffer = b"data: a\r\ndata: b\npartial".to_vec();
 
         assert_eq!(next_line(&mut buffer).as_deref(), Some("data: a"));
         assert_eq!(next_line(&mut buffer).as_deref(), Some("data: b"));
         // No newline yet, so the partial line stays buffered.
         assert_eq!(next_line(&mut buffer), None);
-        assert_eq!(buffer, "partial");
+        assert_eq!(buffer, b"partial");
+    }
+
+    #[test]
+    fn keeps_a_multibyte_char_split_across_chunks_intact() {
+        // "中" is the three bytes E4 B8 AD; the first byte arrives in its own chunk,
+        // so a naive per-chunk `from_utf8_lossy` would have replaced it with U+FFFD.
+        let mut buffer: Vec<u8> = b"data: ".to_vec();
+        buffer.push(0xE4);
+        assert_eq!(next_line(&mut buffer), None);
+        buffer.extend_from_slice(&[0xB8, 0xAD, b'\n']);
+        assert_eq!(next_line(&mut buffer).as_deref(), Some("data: 中"));
     }
 
     #[test]

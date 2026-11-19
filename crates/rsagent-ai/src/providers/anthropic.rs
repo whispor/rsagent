@@ -147,12 +147,12 @@ impl Provider for AnthropicProvider {
                 };
 
             let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
+            let mut buffer: Vec<u8> = Vec::new();
 
             while let Some(chunk) = byte_stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        buffer.extend_from_slice(&bytes);
                         while let Some(line) = sse::next_line(&mut buffer) {
                             // Anthropic interleaves `event:` and `data:` lines; only the
                             // `data:` JSON is needed, and it carries its own `type` field.
@@ -241,6 +241,22 @@ fn user_blocks(blocks: &[ContentBlock]) -> Vec<Value> {
 
 fn assistant_blocks(message: &AssistantMessage) -> Vec<Value> {
     let mut blocks: Vec<Value> = Vec::new();
+    // With extended thinking enabled, Anthropic requires the assistant turn to
+    // replay its thinking blocks — signature included — verbatim before any text
+    // or tool_use, otherwise the next request is rejected with a 400.
+    for block in &message.content {
+        if let ContentBlock::Thinking {
+            thinking,
+            signature,
+        } = block
+        {
+            let mut value = json!({ "type": "thinking", "thinking": thinking });
+            if let Some(signature) = signature {
+                value["signature"] = json!(signature);
+            }
+            blocks.push(value);
+        }
+    }
     let text = message.to_text();
     if !text.is_empty() {
         blocks.push(json!({ "type": "text", "text": text }));
@@ -335,6 +351,8 @@ struct AnthropicStreamParser {
     closed: HashSet<usize>,
     stop_reason: Option<String>,
     usage: Usage,
+    /// Set once an `error` event arrives, so `finish` does not emit a success `Done`.
+    failed: bool,
 }
 
 impl AnthropicStreamParser {
@@ -347,6 +365,7 @@ impl AnthropicStreamParser {
             closed: HashSet::new(),
             stop_reason: None,
             usage: Usage::default(),
+            failed: false,
         }
     }
 
@@ -385,6 +404,7 @@ impl AnthropicStreamParser {
                 }
             }
             "error" => {
+                self.failed = true;
                 let detail = value
                     .get("error")
                     .and_then(|e| e.get("message"))
@@ -548,6 +568,12 @@ impl AnthropicStreamParser {
     }
 
     fn finish(&mut self) -> Vec<StreamEvent> {
+        // A failed stream already yielded its terminal `Error`; emitting a `Done`
+        // now would let "last terminal event wins" consumers read success.
+        if self.failed {
+            return Vec::new();
+        }
+
         let mut events = Vec::new();
 
         // Close any block the stream ended without a `content_block_stop` for.
@@ -656,6 +682,50 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read_file");
         assert_eq!(calls[0].2["path"], "a.txt");
+    }
+
+    #[test]
+    fn an_error_event_suppresses_the_success_done() {
+        let model = test_model();
+        let mut parser = AnthropicStreamParser::new(&model);
+
+        let events = parser.handle_event(&json!({
+            "type": "error",
+            "error": { "type": "overloaded_error", "message": "Overloaded" }
+        }));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], StreamEvent::Error { .. }));
+
+        // `finish` must not append a `Done` after the error, or consumers that
+        // take the last terminal event would read the failure as success.
+        let tail = parser.finish();
+        assert!(
+            !tail.iter().any(|e| matches!(e, StreamEvent::Done { .. })),
+            "no Done after an error"
+        );
+    }
+
+    #[test]
+    fn replays_thinking_blocks_before_text_and_tool_use() {
+        let model = test_model();
+        let mut message = AssistantMessage::partial(&model);
+        message.content.push(ContentBlock::Thinking {
+            thinking: "let me think".to_string(),
+            signature: Some("sig-abc".to_string()),
+        });
+        message.content.push(ContentBlock::text("answer"));
+        message.content.push(ContentBlock::ToolCall {
+            id: "toolu_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: json!({ "path": "a.txt" }),
+        });
+
+        let blocks = assistant_blocks(&message);
+        assert_eq!(blocks[0]["type"], json!("thinking"));
+        assert_eq!(blocks[0]["thinking"], json!("let me think"));
+        assert_eq!(blocks[0]["signature"], json!("sig-abc"));
+        assert_eq!(blocks[1]["type"], json!("text"));
+        assert_eq!(blocks[2]["type"], json!("tool_use"));
     }
 
     #[test]
