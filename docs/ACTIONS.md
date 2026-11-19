@@ -20,13 +20,20 @@
 | --- | --- |
 | `cargo fmt --all --check` | ✅ 干净 |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | ✅ 0 警告 |
-| `cargo test --workspace --locked` | ✅ **243 通过 / 0 失败** |
+| `cargo test --workspace --locked` | ✅ **251 通过 / 0 失败** |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | ✅ 0 告警 |
 
-**上一轮（H1–H7 + M16/M17）已全部修复并核实**：`3b22d5f`、`e939f87`、`c8f6351`、
-`73fb63b`。这 9 条**从本清单移除**，不再重复。
+**已修复（评审方逐条核实）**：
 
-**综合评分 9.1 / 10**（较上一版 7.9 提升，主要来自 H1–H7 的修复）。
+- **H1–H7 + M16/M17**（9 条）：`3b22d5f`、`e939f87`、`c8f6351`、`73fb63b`。
+- **A1 + A2 + A3**（本轮）：`cf67bf8`、`9029cc3`、`e1906b5`——见 §2 各条验收证据。
+  测试数 243 → 251（A1 +5、A2 +2、A3 +1）。
+
+**综合评分 9.1 → 9.3 / 10**（A1 消除了一处安全语义反转，A2 修好了熔断器两处状态机漏洞，
+A3 消除了 Windows 上的必然失败）。
+
+**护栏复核（本轮）**：无新增依赖、无 `#[allow]`、无业务代码 `#[cfg]`、无 `unsafe`/`TODO`、
+无无关重构——三项修复都是**给已有方法补实现或改已有函数**，没有新造抽象。✅
 
 **环境注意（非项目缺陷）**：本机 Windows + MSVC 14.44 下 dev profile 的 `-Z7` 会让
 `ring` 编译失败（`D8050`），加 `CARGO_PROFILE_DEV_DEBUG=0` 可绕过；CI 不受影响。
@@ -43,7 +50,7 @@
 
 #### A1 · 非内置工具补 `permission()`，修好 `--allow` 语义
 
-- **状态**：待办
+- **状态**：已完成 (cf67bf8)
 - **成本**：约 0.5 天 · **影响**：高（安全 + 可用性）
 - **问题（已验证）**：`crates/rsagent-agent/src/sources/` 下 5 个 `impl Tool`
   （`local.rs:171`、`skill.rs:264`、`web.rs:243`、`mcp_stdio.rs:495`、`mcp_http.rs:452`）
@@ -72,11 +79,24 @@
   再手工确认 `rsagent tools list` 对 `web` 来源显示 `[network]`。
 - **关联**：D15、`docs/EXTENSIBILITY.md` §2.4 不变量 #4。
 
+```
+- 状态：已完成 (cf67bf8)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 248 通过 / 0 失败（较上轮 +5）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：a_web_tool_is_a_network_call、an_mcp_http_tool_is_a_network_call、
+    an_mcp_stdio_tool_is_a_network_call、a_local_tool_is_an_exec_call、
+    a_skill_tool_is_an_exec_call
+- 文档同步：CHANGELOG.md
+```
+
 ---
 
 #### A2 · `record_success` 加状态判断，修好并发下的熔断器语义
 
-- **状态**：待办
+- **状态**：已完成 (9029cc3)
 - **成本**：约 0.5 天 · **影响**：中高（长会话可靠性）
 - **问题（已验证）**：`crates/rsagent-agent/src/breaker.rs:145-151` 的 `record_success`
   **无条件**把状态置 `Closed`、清零 `failures`。两个后果：
@@ -104,11 +124,24 @@
     `allows()` 再次有机会）
 - **注意**：这条**不能**用 `#[allow]` 绕过任何 lint；用 `#[expect(..., reason = "…")]`。
 
+```
+- 状态：已完成 (9029cc3)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 250 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：a_late_success_does_not_close_an_open_breaker、
+    a_dropped_probe_returns_the_breaker_to_open
+- 文档同步：CHANGELOG.md
+- 说明：探测 deadline 复用 `cooldown`（未新增 `BreakerPolicy` 字段），保持「时间从外部传入」约定。
+```
+
 ---
 
 #### A3 · `read_file` 与 `edit_file` 的 CRLF 一致性
 
-- **状态**：待办
+- **状态**：已完成 (e1906b5) —— *评审方补标：执行方提交了修复但漏改此状态行*
 - **成本**：约 0.5 天 · **影响**：中（Windows 仓库上的必然失败）
 - **问题**：`read_file`（`tools.rs:157`）用 `data.lines()`，`lines()` 会**吃掉行尾的
   `\r`**；`edit_file` 做的是**精确子串匹配**。于是模型在 CRLF 文件上「读出来 → 原样贴回
@@ -127,6 +160,21 @@
   新增单测：写一个含 `\r\n` 的文件 → `read_file` 取出的片段作为 `old_string` 传给
   `edit_file` → **编辑成功**。
 - **关联**：M14。
+
+```
+- 状态：已完成 (e1906b5)  [评审方核实并补录]
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 251 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：read_file_output_edits_a_crlf_file（agent_loop.rs）
+  - 实现：read_file 改用 split_inclusive('\n') + strip_suffix('\n')，保留 '\r'
+- 文档同步：CHANGELOG.md、README.md
+- 评审方注：选了建议中的方案 (a)「读时保留 \r」，与首选一致；且带端到端测试
+  而非仅单元断言。核实方式：`git show e1906b5 -- crates/rsagent-agent/src/tools.rs`
+  与回读当前源码。
+```
 
 ---
 
@@ -350,9 +398,27 @@
 | 日期 | 代码基线 commit | 测试数 | 评分 | 主要变化 |
 | --- | --- | --- | --- | --- |
 | 2026-11-19 | `73fb63b` | 243 | **9.1** | H1–H7 + M16/M17 已修复并核实；建立本清单，提出 A1–A5 / B1–B5 / C1–C3 |
+| 2026-11-19 | `e1906b5` | 251 | **9.3** | A1+A2+A3 已完成并核实（`cf67bf8`/`9029cc3`/`e1906b5`）；护栏全过；M5/M10/M14 关闭 |
 
 > **基线口径**：这里记的是**最后一个改动 `crates/` 的提交**，不是 HEAD。
 > 查代码基线：`git log -1 --format=%h -- crates/`。
 > 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入——若两次复评之间
 > 只有文档提交，视为「无代码改动」，走轻量路径，不必重跑全量门禁。
-> 本轮评审时 HEAD 为 `dd112e9`，其 `crates/` 内容与 `73fb63b` 完全相同。
+
+### 本轮（`e1906b5`）复评记录
+
+**核实结论：A1、A2、A3 全部完成，修法与建议一致，质量高。**
+
+| 条目 | 提交 | 核实要点 |
+| --- | --- | --- |
+| A1 | `cf67bf8` | 5 个来源全部显式声明：`web`/`mcp_http`/`mcp_stdio` → `Network`，`local`/`skill` → `Exec`。新增 5 个测试逐一断言类别。**恰好是我建议的映射。** |
+| A2 | `9029cc3` | `record_success` 改为按状态分派（`Closed`/`HalfOpen` → 关闭；`Open` → **忽略**晚到的成功）；新增 `probe_started_at` 字段；`allows()` 与 `effective()` **都**处理了废弃探测的再武装。新增 2 个测试。 |
+| A3 | `e1906b5` | `read_file` 改用 `split_inclusive('\n')` 且只剥 `\n`，保留 `\r`；新增 `read_file_output_edits_a_crlf_file` 端到端测试（读 CRLF → 贴回 `edit_file` → 断言成功）。 |
+
+**A2 的额外优点**：探测 deadline **复用 `cooldown`** 而非新增 `BreakerPolicy` 字段——既解决了
+问题又没扩大公开 API，符合北极星①④。评审方确认 `effective()`（`state()`/`health()` 的数据源）
+也做了同样处理，因此**健康显示与实际行为一致**，不会出现「显示半开、实际已可探测」的错位。
+
+**评审方低优先级观察（非缺陷，不要求修）**：探测 deadline 等于 `cooldown`（默认 60s），
+因此一个**合法但慢于 60s** 的探测可能被判为废弃并再武装。工具调用通常自带超时且远短于
+60s，实际影响可忽略；若将来出现长探测场景，可考虑独立的 `probe_timeout`。
