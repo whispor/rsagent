@@ -242,16 +242,18 @@ H1–H7、A 组 5/5、B 组 5/5 均已落地。**当前无「会静默给错结�
 
 ## 5. 中优先级（5 条）
 
-> 每条都已映射到 [ACTIONS.md](ACTIONS.md) 的任务号（无编号者尚未排期）。
+> 每条都已映射到 [ACTIONS.md](ACTIONS.md) 的任务号。
 > M5/M10/M14 见 §3.2，M12/M13 见 §3.3，M9/M8/M1 见 §3.4，M2/M3 见 §3.5——均已修复。
+> **下面 5 条已在 2026-11-20 04:19 逐条回读源码重新核实（行号为准），仍然存在**，
+> 并已转成可执行条目：[ACTIONS.md §8 · E1–E4](ACTIONS.md)（M6 在 §7 的 D5）。
 
 | # | 问题 | 位置 | 影响与修复 | ACTIONS | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| M4 | `Usage.input` 两家语义相反（Anthropic 不含 cache，OpenAI 含） | [types.rs:86-91](../crates/rsagent-ai/src/types.rs#L86-L91) | 开 prompt cache 后 token/成本明显偏低 | — | 已验证 |
-| M6 | 配置里的相对路径按**进程 cwd** 解析，而非配置文件目录或 `--cwd` | [main.rs:736-779](../crates/rsagent/src/main.rs#L736-L779) | 在 `repo/sub` 下运行 `path = "./skills/team"` 会找错目录并被静默跳过 | — | 已验证 |
-| M7 | 外部输出无大小上限（search 整文件读入、subprocess 全缓冲） | [tools.rs:452-474](../crates/rsagent-agent/src/tools.rs#L452-L474)、[subprocess.rs:105-112](../crates/rsagent-agent/src/sources/subprocess.rs#L105-L112) | 32K 截断发生在完整缓冲之后，对内存峰值无效 | — | 已验证 |
-| M11 | REPL 只容忍 `ModelFailed`；`MaxTurnsExceeded`/`NoResult` 直接踢出且跳过 session 保存 | [main.rs:972-982](../crates/rsagent/src/main.rs#L972-L982) | 与 README "REPL never exits on a failed turn" 矛盾；跑满 50 轮丢掉整轮对话 | — | 已验证 |
-| M15 | `skill` 的 `command` 可用 `../..` 逃出技能目录；`mcp-http` 信任服务器自报的 `readOnlyHint` | [skill.rs:175-201](../crates/rsagent-agent/src/sources/skill.rs#L175-L201)、[mcp.rs:90-96](../crates/rsagent-agent/src/sources/mcp.rs#L90-L96) | 复制别人的 skill 目录 = 可执行任意二进制且可免审批；远端服务器可让任意工具跳过审批 | — | 已验证 |
+| M4 | `Usage.input` 两家语义相反（Anthropic 不含 cache，OpenAI 含） | [types.rs:71-74](../crates/rsagent-ai/src/types.rs#L71-L74)、[anthropic.rs:392-394](../crates/rsagent-ai/src/providers/anthropic.rs#L392-L394)、[openai.rs:361-376](../crates/rsagent-ai/src/providers/openai.rs#L361-L376) | 开 prompt cache 后 token/成本明显偏低，且**不报错** | **E4** | 已验证 |
+| M6 | 配置里的相对路径按**进程 cwd** 解析，而非配置文件目录或 `--cwd` | [main.rs:736-779](../crates/rsagent/src/main.rs#L736-L779) | 在 `repo/sub` 下运行 `path = "./skills/team"` 会找错目录并被静默跳过 | **D5** | 已验证 |
+| M7 | 外部输出无大小上限（search 整文件读入、subprocess 全缓冲） | [tools.rs:467](../crates/rsagent-agent/src/tools.rs#L467)、[subprocess.rs:105-112](../crates/rsagent-agent/src/sources/subprocess.rs#L105-L112) | 32K 截断发生在完整缓冲之后，对内存峰值无效 | **E2** | 已验证 |
+| M11 | REPL 只容忍 `ModelFailed`；`MaxTurnsExceeded`/`NoResult` 直接踢出且跳过 session 保存 | [main.rs:1057-1058](../crates/rsagent/src/main.rs#L1057-L1058) | 与 README "REPL never exits on a failed turn" 矛盾；跑满 50 轮丢掉整轮对话 | **E3** | 已验证 |
+| M15 | `skill` 的 `command` 可用 `../..` 逃出技能目录；`mcp-http` 信任服务器自报的 `readOnlyHint` | [skill.rs:177-181](../crates/rsagent-agent/src/sources/skill.rs#L177-L181)、[mcp.rs:92-96](../crates/rsagent-agent/src/sources/mcp.rs#L92-L96) | 复制别人的 skill 目录 = 可执行任意二进制且可免审批；远端服务器可让任意工具跳过审批 | **E1** | 已验证 |
 
 ---
 

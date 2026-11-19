@@ -813,3 +813,122 @@ README。成本约 0.5 天。
 **评审方对阶段 2 的总评**：**D1 是唯一真正重要的一项**——它保护的是「审批是唯一防线」
 这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。D3/D4 是低成本清理。
 D5 是用户可见的行为修正。D6 需要你决策。**建议按 D1 → D2 → D3/D4 → D5 → D6 推进。**
+
+---
+
+## 8. 剩余中等项（E1–E4）
+
+> **为什么单列一节**：这四条是 [REVIEW.md](REVIEW.md) §5 里**尚未排期**的发现。它们此前只以
+> 「结论」形式存在，执行方拿到的是描述而非任务。本节把它们转成与 A/B 组同样格式的条目：
+> 定位到行、给出改法、写明验收。
+>
+> **2026-11-20 04:19 逐条回读源码重新核实，四条在当前代码里仍然存在**（行号为准）。
+> 编号用 E 组，以免与 §2 的 A/B/C 组、§7 的 D 组冲突。
+
+### E1 · M15 · `skill` 的 `command` 可逃出技能目录（**建议优先**）
+
+- **状态**：待办
+- **成本**：约 0.5 天 · **影响**：中高（安全）
+- **问题（已验证）**：`crates/rsagent-agent/src/sources/skill.rs:177-181`
+
+  ```rust
+  let command = Path::new(&config.command);
+  let program = if command.is_absolute() {
+      command.to_path_buf()
+  } else {
+      dir.join(command)          // 没有 canonicalize，也没有 starts_with(dir) 检查
+  };
+  ```
+
+  `skill.toml` 的 `command` 可以是绝对路径，也可以是含 `../..` 的相对路径。两者都不受技能
+  目录约束。**后果**：从别处复制一个 skill 目录过来（或 `git clone` 一个含 skill 的仓库），
+  就等于获得「执行任意二进制」的能力——而且 `requires_approval` 默认由该 manifest 自己声明。
+- **方案**：解析后 `canonicalize()`，要求结果 `starts_with(canonicalized_dir)`；绝对路径
+  若在目录外则拒绝并给出清晰错误。注意 `canonicalize` 要求路径存在，需处理文件不存在的情况
+  （报错即可）。**不要**为此新增依赖。
+- **验收**：新增单测：manifest 里 `command = "../../evil.sh"` 与 `command = "/bin/sh"`
+  （目录外绝对路径）都必须**加载失败**；目录内的 `command = "run.sh"` 仍正常。
+- **关联**：REVIEW.md M15。
+
+### E2 · M7 · 外部输出无大小上限
+
+- **状态**：待办
+- **成本**：约 0.5 天 · **影响**：中（内存峰值）
+- **问题（已验证）**：`crates/rsagent-agent/src/tools.rs:467`（`SearchTool` 的实现，起点
+  `tools.rs:422`）
+
+  ```rust
+  let Ok(text) = tokio::fs::read_to_string(&entry_path).await else { … };
+  ```
+
+  `search` 把**每个命中文件整份读进内存**再逐行匹配。现有的 32K 截断发生在**完整缓冲之后**，
+  对内存峰值没有任何约束——一个几百 MB 的文件（或一个巨大的 `--memory` 文件、一个超大的
+  MCP 响应）就能把进程推高。同类问题也在 `sources/subprocess.rs` 的共享缓冲与
+  `mcp_http.rs` 的 `response.text()`。
+- **方案**：读侧加上限。最小改法：`search` 用一个带上限的读取（`take(limit)` 或先查
+  `metadata().len()` 超限则跳过并注明），上限取一个明显大于正常源文件的值（如 8 MiB）。
+  `subprocess`/`mcp_http` 的缓冲同理，超限时**截断并标记**而不是继续累积。
+- **验收**：新增单测：造一个超过上限的文件 → `search` **不**把它整份读入，且结果里能看到
+  「已跳过/已截断」的标记。
+- **注意**：不要改变现有 32K **输出**截断的行为——那条是给模型的上下文预算用的，与这里的
+  内存上限是两件事。
+
+### E3 · M11 · REPL 遇 `MaxTurnsExceeded`/`NoResult` 会退出且丢会话
+
+- **状态**：待办
+- **成本**：约 0.5 天 · **影响**：中（用户可见）
+- **问题（已验证）**：`crates/rsagent/src/main.rs:1057-1058`
+
+  ```rust
+  match run_prompt(agent, rx, renderer, log, input_text.to_string()).await {
+      Ok(()) => {}
+      Err(error) if is_model_failure(&error) => {}   // 只有模型级失败被容忍
+      Err(error) => return Err(error),               // MaxTurnsExceeded / NoResult 落这里
+  }
+  if let Some(session) = session.as_deref_mut() {
+      session.save(agent, renderer.palette);         // ← 上面 return 时被跳过
+  }
+  ```
+
+  与 [README](../README.md) 的「REPL never exits on a failed turn」**矛盾**：跑满 `--max-turns`
+  或模型没给出结果时，REPL 直接退出，**且这一轮的会话没有保存**——用户丢了整轮对话。
+- **方案**：把「可容忍」的判定从「是否模型级失败」放宽为「是否**应当结束会话**」：`MaxTurnsExceeded`
+  与 `NoResult` 应打印提示后**继续 REPL**（并把会话存下来）。建议抽一个
+  `ends_the_session(&AgentError) -> bool`，只对真正的致命错误返回 `true`——比现在的
+  `is_model_failure` 更贴合语义。同时确认 README 的措辞与实际一致。
+- **验收**：新增 E2E：`--faux` + `--max-turns 1` + 一个需要工具的 prompt，交互模式下断言
+  进程**没有退出**且会话文件已写入。
+- **关联**：REVIEW.md M11、§6 的「退出码」契约（`--print` 下退 1 是对的，REPL 下不该退）。
+
+### E4 · M4 · `Usage.input` 两家 provider 语义相反
+
+- **状态**：待办
+- **成本**：约 0.5 天 · **影响**：中（成本/用量统计偏低）
+- **问题（已验证）**：`Usage`（`crates/rsagent-ai/src/types.rs:71-74`）把 `input` 文档写作
+  「Input (prompt) tokens billed for this call」，另有独立的 `cache_read` / `cache_write`。
+  但两家填法**相反**：
+  - **Anthropic**（`anthropic.rs:392-394`）：`input = input_tokens`——Anthropic 的
+    `input_tokens` **不含**缓存命中的部分（它们在 `cache_read_input_tokens` 里）。
+    即 `input` 与 `cache_read` **互斥**，总量 = 三者之和。
+  - **OpenAI**（`openai.rs:361-376`）：`input = prompt_tokens`——而 `prompt_tokens`
+    **包含**缓存命中（`prompt_tokens_details.cached_tokens` 是它的**子集**）。
+    即 `input` ⊇ `cache_read`。
+
+  **后果**：任何按 `input + cache_read` 计算总输入量的消费者，在 OpenAI 上会**重复计数**；
+  任何只看 `input` 的消费者，在 Anthropic 上会**少算**。开启 prompt cache 后用量与成本
+  会明显偏离真实值，而且**不会报错**。
+- **方案（二选一，推荐前者）**：
+  - **(a) 统一为「互斥」语义**：让 OpenAI 侧填 `input = prompt_tokens - cached_tokens`
+    （饱和减），并在 `Usage::input` 的文档里**明确写清**「不含缓存命中的输入 token」。
+  - **(b) 统一为「包含」语义**：让 Anthropic 侧 `input = input_tokens + cache_read`。
+  - 无论选哪个，**都要把语义写进文档注释**——这正是本条问题的根源：字段文档有歧义。
+- **验收**：新增单测：给两家各喂一份带缓存字段的 `usage` JSON，断言归一化后
+  `input + cache_read`（或按选定语义）得到同一个总量。
+- **关联**：REVIEW.md M4。**注意**：`Usage` 在 STABILITY 的 Semver 表里，改语义属破坏性
+  变更，需记 CHANGELOG。
+
+---
+
+**评审方对 E 组的排序**：**E1（skill 逃逸，安全）→ E3（REPL 丢会话，用户可见）→
+E2（内存上限）→ E4（用量口径，需定语义）**。
+E1 与 §7 的 D1 同属「审批/隔离模型」这条线，若一起做，安全面就完整了。
