@@ -11,7 +11,7 @@ mod mcp;
 mod mcp_http;
 mod mcp_stdio;
 mod skill;
-mod subprocess;
+pub(crate) mod subprocess;
 mod web;
 
 pub use builtin::{BuiltinSource, BUILTIN_SOURCE_ID};

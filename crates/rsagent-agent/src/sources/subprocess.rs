@@ -14,12 +14,20 @@
 //! not trip the breaker (decision D4).
 
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
 
+use crate::platform::kill_tree;
 use crate::tool::ToolResult;
+
+/// How long to wait for the stdout/stderr pipes to reach EOF after the process exits (or
+/// is killed). A grandchild that inherited a pipe can hold it open forever; this bounds
+/// that wait so a turn can never hang on a backgrounded daemon.
+pub(crate) const DRAIN_GRACE: Duration = Duration::from_secs(1);
 
 /// Run `argv` once, optionally sending `request` on stdin, and return its trimmed stdout.
 ///
@@ -44,39 +52,44 @@ pub(crate) async fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("cannot run `{label}`: {error}"))?;
 
-    // Send the request (if any) and close stdin, so the program sees a clean EOF.
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "stdin was not piped".to_string())?;
-        if let Some(request) = request {
-            let payload = format!("{request}\n");
-            stdin
-                .write_all(payload.as_bytes())
-                .await
-                .map_err(|error| format!("cannot send the request to `{label}`: {error}"))?;
-            let _ = stdin.flush().await;
+    // Drain both pipes on their own tasks so a full buffer cannot deadlock the wait. The
+    // output accumulates in a shared buffer, so an aborted drain still yields what arrived.
+    let stdout_sink = Arc::new(StdMutex::new(Vec::new()));
+    let stderr_sink = Arc::new(StdMutex::new(Vec::new()));
+    let mut stdout_task = tokio::spawn(drain_into(child.stdout.take(), Arc::clone(&stdout_sink)));
+    let mut stderr_task = tokio::spawn(drain_into(child.stderr.take(), Arc::clone(&stderr_sink)));
+
+    // One deadline covers sending the request *and* waiting for exit, so a program that
+    // never reads its stdin (a large request blocks on a full pipe) or never exits cannot
+    // hold the turn open past `timeout`.
+    let outcome = tokio::time::timeout(timeout, async {
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(request) = request {
+                let payload = format!("{request}\n");
+                stdin
+                    .write_all(payload.as_bytes())
+                    .await
+                    .map_err(|error| format!("cannot send the request to `{label}`: {error}"))?;
+                let _ = stdin.flush().await;
+            }
+            // Dropping `stdin` here closes it, so the program sees a clean EOF.
         }
-    }
-
-    // Drain both pipes on their own tasks so a full buffer cannot deadlock the wait.
-    let stdout_task = tokio::spawn(read_all(child.stdout.take()));
-    let stderr_task = tokio::spawn(read_all(child.stderr.take()));
-
-    let outcome = tokio::select! {
-        status = child.wait() => Outcome::Exited(status),
-        () = tokio::time::sleep(timeout) => Outcome::TimedOut,
-    };
+        child
+            .wait()
+            .await
+            .map_err(|error| format!("`{label}` failed: {error}"))
+    })
+    .await;
 
     let status = match outcome {
-        Outcome::Exited(Ok(status)) => status,
-        Outcome::Exited(Err(error)) => return Err(format!("`{label}` failed: {error}")),
-        Outcome::TimedOut => {
-            let _ = child.kill().await;
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => {
+            kill_tree(&mut child).await;
             return Err(format!(
                 "`{label}` timed out after {}s and was killed",
                 timeout.as_secs()
@@ -84,8 +97,12 @@ pub(crate) async fn run(
         }
     };
 
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
+    // The process has exited; give the pipes a moment to flush, then stop waiting.
+    drain_within(&mut stdout_task).await;
+    drain_within(&mut stderr_task).await;
+    let stdout = take_text(&stdout_sink);
+    let stderr = take_text(&stderr_sink);
+
     if !status.success() {
         let code = status
             .code()
@@ -95,20 +112,40 @@ pub(crate) async fn run(
     Ok(stdout.trim().to_string())
 }
 
-/// Why a run stopped.
-enum Outcome {
-    Exited(std::io::Result<std::process::ExitStatus>),
-    TimedOut,
+/// Read a pipe to the end into `sink`, ignoring errors (a broken pipe shows in the exit
+/// status). Bytes are accumulated, not decoded, so a multi-byte character split across
+/// reads is never corrupted.
+async fn drain_into<R: AsyncRead + Unpin>(reader: Option<R>, sink: Arc<StdMutex<Vec<u8>>>) {
+    let Some(mut reader) = reader else {
+        return;
+    };
+    let mut chunk = [0_u8; 4096];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                if let Ok(mut bytes) = sink.lock() {
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+            }
+        }
+    }
 }
 
-/// Read a pipe to the end, ignoring errors (a broken pipe is reported by the exit status).
-async fn read_all<R: AsyncRead + Unpin>(reader: Option<R>) -> String {
-    let Some(mut reader) = reader else {
-        return String::new();
-    };
-    let mut buffer = String::new();
-    let _ = reader.read_to_string(&mut buffer).await;
-    buffer
+/// Await a drain task, but give up after [`DRAIN_GRACE`] and abort it. The partial output
+/// stays in the sink, so nothing already read is lost.
+pub(crate) async fn drain_within(task: &mut JoinHandle<()>) {
+    if tokio::time::timeout(DRAIN_GRACE, &mut *task).await.is_err() {
+        task.abort();
+    }
+}
+
+/// Decode a shared byte sink into a string (lossily, in case the drain was aborted mid-character).
+fn take_text(sink: &Arc<StdMutex<Vec<u8>>>) -> String {
+    let bytes = sink
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Read a `{"content"|"error"}` reply into a tool result.
@@ -136,8 +173,38 @@ pub(crate) fn parse_response(value: &Value) -> Result<ToolResult, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_response;
+    use super::{parse_response, run};
     use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn a_pipe_held_open_by_a_grandchild_does_not_hang_the_run() {
+        // The shell exits at once, but a background child inherits its stdout, so the read
+        // side never sees EOF. Without a bounded drain this awaited the grandchild forever.
+        #[cfg(windows)]
+        let argv = vec![
+            "cmd".to_string(),
+            "/C".to_string(),
+            "start /B ping -n 30 127.0.0.1 & echo done".to_string(),
+        ];
+        #[cfg(not(windows))]
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 30 & echo done".to_string(),
+        ];
+
+        let start = Instant::now();
+        let output = run(&argv, None, Duration::from_secs(5))
+            .await
+            .expect("the shell itself exits cleanly");
+        assert!(output.contains("done"), "stdout: {output:?}");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the drain must be bounded, took {:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn an_error_response_is_a_business_failure() {

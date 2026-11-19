@@ -294,14 +294,27 @@ async fn drain_stderr(mut pipe: ChildStderr, sink: Arc<StdMutex<String>>) {
             Ok(read) => {
                 if let Ok(mut text) = sink.lock() {
                     text.push_str(&String::from_utf8_lossy(&buffer[..read]));
-                    if text.len() > STDERR_LIMIT {
-                        let cut = text.len() - STDERR_LIMIT;
-                        text.drain(..cut);
-                    }
+                    trim_front_to_limit(&mut text, STDERR_LIMIT);
                 }
             }
         }
     }
+}
+
+/// Drop leading bytes of `text` until it is at most `limit` bytes long.
+///
+/// The cut is advanced to the next UTF-8 character boundary, so it never lands inside a
+/// multi-byte character — slicing on a raw byte count would make `String::drain` panic
+/// (and that panic would kill the stderr-draining task, silently losing diagnostics).
+fn trim_front_to_limit(text: &mut String, limit: usize) {
+    if text.len() <= limit {
+        return;
+    }
+    let mut cut = text.len() - limit;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    text.drain(..cut);
 }
 
 /// The shared connection to the server, so every tool of the source talks through one pipe.
@@ -835,5 +848,25 @@ mod tests {
         let (_server_write, client_read) = tokio::io::duplex(64);
         let session = Session::over(Box::new(client_write), Box::new(client_read));
         assert_eq!(session.stderr_tail(), "");
+    }
+
+    #[test]
+    fn trimming_stderr_never_splits_a_character() {
+        use super::{trim_front_to_limit, STDERR_LIMIT};
+
+        // "中" is 3 bytes; 6000 bytes exceeds the limit by 1904, which is not a multiple
+        // of 3, so a raw byte-length cut would land mid-character and panic in `drain`.
+        let mut text = "中".repeat(2000);
+        trim_front_to_limit(&mut text, STDERR_LIMIT);
+        assert!(text.len() <= STDERR_LIMIT);
+        assert!(
+            text.chars().all(|c| c == '中'),
+            "no character may be corrupted"
+        );
+
+        // A string already within the limit is untouched.
+        let mut short = "hello".to_string();
+        trim_front_to_limit(&mut short, STDERR_LIMIT);
+        assert_eq!(short, "hello");
     }
 }

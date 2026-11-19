@@ -29,6 +29,28 @@ pub(crate) fn shell_command(command: &str) -> Command {
     process
 }
 
+/// Kill `child` and, where the platform supports it, the whole process tree it spawned.
+///
+/// [`tokio::process::Child::kill`] only signals the direct child; a command that
+/// backgrounds a grandchild (`daemon &`, `cmd /C start`) would leave it running and
+/// holding the inherited pipes open. Windows gets a real tree kill via `taskkill /T`;
+/// elsewhere we signal the direct child.
+pub(crate) async fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    {
+        if let Some(pid) = child.id() {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+        }
+    }
+    let _ = child.kill().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::shell_command;

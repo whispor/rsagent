@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use crate::glob::glob_match;
 use crate::html::html_to_text;
 use crate::memory::DEFAULT_RECALL_LIMIT;
 use crate::platform;
+use crate::sources::subprocess::drain_within;
 use crate::tool::{Tool, ToolContext, ToolResult};
 
 /// Directory names that recursive tools never descend into.
@@ -776,18 +778,24 @@ impl Tool for BashTool {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|error| format!("failed to spawn command: {error}"))?;
 
         // Drain each pipe on its own task so a full buffer cannot deadlock the wait,
-        // and so lines can be streamed as progress while the command runs.
-        let stdout_task = tokio::spawn(stream_pipe(
+        // and so lines can be streamed as progress while the command runs. Output also
+        // lands in a shared sink, so a bounded drain below still yields what arrived.
+        let stdout_sink = Arc::new(StdMutex::new(String::new()));
+        let stderr_sink = Arc::new(StdMutex::new(String::new()));
+        let mut stdout_task = tokio::spawn(stream_pipe(
             child.stdout.take(),
             context.progress().cloned(),
+            Arc::clone(&stdout_sink),
         ));
-        let stderr_task = tokio::spawn(stream_pipe(
+        let mut stderr_task = tokio::spawn(stream_pipe(
             child.stderr.take(),
             context.progress().cloned(),
+            Arc::clone(&stderr_sink),
         ));
         let cancel = context.cancel().clone();
 
@@ -803,11 +811,11 @@ impl Tool for BashTool {
                 return Err(format!("failed to wait for command: {error}"))
             }
             BashExit::Cancelled => {
-                let _ = child.kill().await;
+                platform::kill_tree(&mut child).await;
                 return Err("command cancelled".to_string());
             }
             BashExit::TimedOut => {
-                let _ = child.kill().await;
+                platform::kill_tree(&mut child).await;
                 return Err(format!(
                     "command timed out after {}s and was killed",
                     timeout.as_secs()
@@ -815,8 +823,12 @@ impl Tool for BashTool {
             }
         };
 
-        let stdout = stdout_task.await.unwrap_or_default();
-        let stderr = stderr_task.await.unwrap_or_default();
+        // A grandchild that inherited the pipes can hold them open forever; stop waiting
+        // after a short grace so a backgrounded daemon cannot hang the turn.
+        drain_within(&mut stdout_task).await;
+        drain_within(&mut stderr_task).await;
+        let stdout = take_sink(&stdout_sink);
+        let stderr = take_sink(&stderr_sink);
         let mut combined = String::new();
         if !stdout.is_empty() {
             combined.push_str(&stdout);
@@ -840,16 +852,21 @@ impl Tool for BashTool {
     }
 }
 
-/// Read a pipe to the end, streaming each line to `progress` and returning the full text.
-async fn stream_pipe<R>(pipe: Option<R>, progress: Option<UnboundedSender<String>>) -> String
-where
+/// Read a pipe to the end, streaming each line to `progress` and appending it to `sink`.
+///
+/// Lines are decoded only once a full line (ending in `\n`, or the final partial at EOF)
+/// has been read, so a multi-byte character is never split.
+async fn stream_pipe<R>(
+    pipe: Option<R>,
+    progress: Option<UnboundedSender<String>>,
+    sink: Arc<StdMutex<String>>,
+) where
     R: tokio::io::AsyncRead + Unpin,
 {
     let Some(pipe) = pipe else {
-        return String::new();
+        return;
     };
     let mut reader = BufReader::new(pipe);
-    let mut out = String::new();
     let mut buf = Vec::new();
 
     loop {
@@ -862,11 +879,19 @@ where
                 if let Some(sender) = &progress {
                     let _ = sender.send(line.trim_end_matches(['\n', '\r']).to_string());
                 }
-                out.push_str(&line);
+                if let Ok(mut text) = sink.lock() {
+                    text.push_str(&line);
+                }
             }
         }
     }
-    out
+}
+
+/// Snapshot a shared output sink, tolerating a poisoned lock.
+fn take_sink(sink: &Arc<StdMutex<String>>) -> String {
+    sink.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// The error the memory tools return when the agent has no memory attached.
