@@ -1487,6 +1487,33 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 - **关联**：REVIEW.md M4。**注意**：`Usage` 在 STABILITY 的 Semver 表里，改语义属破坏性
   变更，需记 CHANGELOG。
 
+> **评审方补充核实（2026-11-20 12:19）——外部事实已佐证，且影响面已界定**
+>
+> 本条结论依赖**两处外部 API 语义**（不是仓库内可验证的事实），原先只标「已验证」不够严谨。
+> 评审方查证后**两处均得到独立佐证**：
+>
+> - **OpenAI 的 `prompt_tokens` 确实包含 cached**：一份实现文档明写「The OpenAI shape gives
+>   `prompt_tokens` ***including*** cached」（[llm_meter](https://pub.dev/documentation/llm_meter/0.1.0/llm_meter/openAiUsage.html)），
+>   另一份指出「OpenAI does NOT surface a separate cache-miss count; you can derive it from
+>   `prompt_tokens - prompt_tokens_details.cached_tokens`」（[aiperf](https://raw.githubusercontent.com/ai-dynamo/aiperf/d72160e20957013d6608afcc88ed24100cb27dc5/docs/reference/vendor-usage-fields.md#1)）。
+> - **Anthropic 的 `input_tokens` 确实不含 cache**：「Anthropic's reported `input_tokens`
+>   excludes both cache-creation and cache-read portions」（[nexus](https://pkg.go.dev/github.com/frankbardon/nexus@v0.32.0/pkg/engine/pricing#1)）；
+>   另一处给出同样的修法：「Count total prompt tokens as `input_tokens + cache_creation + cache_read`」
+>   （[ruflo PR #4673](https://github.com/ruvnet/ruflo/pull/4673#1)）。
+>
+> **方案 (a) 与业界做法一致**：上面 aiperf 那条给出的「用 `prompt_tokens - cached_tokens`
+> 导出 cache-miss」正是建议 (a) 的做法——**不是评审方臆造的归一化，而是别人也在这么做**。
+>
+> **影响面已界定：只影响成本/用量统计，不影响上下文管理正确性。** 评审方一度担心
+> 「cached token 仍占上下文窗口，若压缩器用 `Usage` 算填充率会触发过晚」，故回读了压缩器：
+> `compact_context`（`agent.rs:737`）用的是 `context_budget()`（基于 `model.context_window`）
+> 与 `message_chars()`（`agent.rs:1012`）——**基于消息文本的字符估算，完全不读 `Usage`**。
+> 因此 cached token 在预算里**已被正确计入**，那个风险**不适用于本项目**。
+> **这让 E4 的严重度可以明确为「中偏低」**：它是统计准确性问题，不是功能正确性问题。
+>
+> **优先级相应下调**：E4 仍值得修（用量/成本是用户可见的数字），但**排在 E1（安全）、
+> E3（丢会话）之后**，且比 E5（文档数字）更值得做。
+
 ---
 
 ### E5 · 🆕 `ARCHITECTURE.md` 里的测试数已过期（230 → 267）
@@ -1514,7 +1541,8 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 ---
 
 **评审方对 E 组的排序**：**E1（skill 逃逸，安全）→ E3（REPL 丢会话，用户可见）→
-E2（内存上限）→ E4（用量口径，需定语义）→ E5（文档数字，5 分钟）**。
+E2（内存上限）→ E4（用量口径，需定语义；**已界定为只影响统计，不影响功能**）→
+E5（文档数字，5 分钟）**。
 E1 与 §7 的 D1 同属「审批/隔离模型」这条线，若一起做，安全面就完整了。
 E5 可以在任何一次顺手的提交里带上。
 

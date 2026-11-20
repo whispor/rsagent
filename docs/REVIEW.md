@@ -386,7 +386,7 @@ H1–H7、A 组 5/5、B 组 5/5、D1–D4、D7–D9 均已落地。**当前无�
 
 | # | 问题 | 位置 | 影响与修复 | ACTIONS | 验证 |
 | --- | --- | --- | --- | --- | --- |
-| M4 | `Usage.input` 两家语义相反（Anthropic 不含 cache，OpenAI 含） | [types.rs:71-74](../crates/rsagent-ai/src/types.rs#L71-L74)、[anthropic.rs:392-394](../crates/rsagent-ai/src/providers/anthropic.rs#L392-L394)、[openai.rs:361-376](../crates/rsagent-ai/src/providers/openai.rs#L361-L376) | 开 prompt cache 后 token/成本明显偏低，且**不报错** | **E4** | 已验证 |
+| M4 | `Usage.input` 两家语义相反（Anthropic 不含 cache，OpenAI 含） | [types.rs:71-74](../crates/rsagent-ai/src/types.rs#L71-L74)、[anthropic.rs:392-394](../crates/rsagent-ai/src/providers/anthropic.rs#L392-L394)、[openai.rs:361-376](../crates/rsagent-ai/src/providers/openai.rs#L361-L376) | 开 prompt cache 后 token/成本明显偏低，且**不报错**。**只影响统计，不影响功能**（压缩器用字符估算，不读 `Usage`） | **E4** | 已验证（**外部 API 语义已另获佐证**，见 ACTIONS.md E4） |
 | M6 | 配置里的相对路径按**进程 cwd** 解析，而非配置文件目录或 `--cwd` | [main.rs:736-779](../crates/rsagent/src/main.rs#L736-L779) | 在 `repo/sub` 下运行 `path = "./skills/team"` 会找错目录并被静默跳过 | **D5** | 已验证 |
 | M7 | 外部输出无大小上限（search 整文件读入、subprocess 全缓冲） | [tools.rs:467](../crates/rsagent-agent/src/tools.rs#L467)、[subprocess.rs:105-112](../crates/rsagent-agent/src/sources/subprocess.rs#L105-L112) | 32K 截断发生在完整缓冲之后，对内存峰值无效 | **E2** | 已验证 |
 | M11 | REPL 只容忍 `ModelFailed`；`MaxTurnsExceeded`/`NoResult` 直接踢出且跳过 session 保存 | [main.rs:1057-1058](../crates/rsagent/src/main.rs#L1057-L1058) | 与 README "REPL never exits on a failed turn" 矛盾；跑满 50 轮丢掉整轮对话 | **E3** | 已验证 |
