@@ -1038,7 +1038,7 @@ the assertion above is sensitive to the category rather than passing for another
 > **2026-11-20 07:19 补充**：实测四个被 README 宣传为「可运行」的 example，**全部 `exit 0`
 > 且输出合理**——承诺成立。但 CI 只编译不执行它们，故新增第 6 条。
 
-- **状态**：待办 · **成本**：约 0.5 天
+- **状态**：已完成 (a27c91c) · **成本**：约 0.5 天
 - **已有且正确、不要动的部分**：三平台矩阵（`fail-fast: false`）、`--locked` 全程、
   `RUSTDOCFLAGS: -D warnings`、独立的 MSRV job（1.95.0 固定）。
 
@@ -1068,6 +1068,33 @@ the assertion above is sensitive to the category rather than passing for another
 **验收**：改完后 `git push` 一次，确认 5 个 job 仍全绿（`ubuntu` / `macos` / `windows` /
 `Docs` / `MSRV`），且 workflow 文件里能搜到 `permissions:`、`timeout-minutes:`、
 `concurrency:`、以及 `@` 后跟 40 位十六进制的 action 引用。
+
+```
+- 状态：已完成 (a27c91c)
+- 六条逐条落地：
+  1. workflow 级 `permissions: contents: read`。
+  2. 四个 action 全部按 commit SHA 固定（注释保留版本）：
+     actions/checkout@11d5960a…（v4）、dtolnay/rust-toolchain@39008827…（stable）、
+     dtolnay/rust-toolchain@1961bfc0…（1.95.0）、Swatinem/rust-cache@d1527c8f…（v2）。
+  3. 新增 `Audit` job：EmbarkStudios/cargo-deny-action@17aeb3c8…（v2.1.3），
+     `command: check advisories`；策略写入新建的 `deny.toml`（`unmaintained = "workspace"`、
+     `yanked = "warn"`，只跑 advisories 故无需许可证白名单）。
+  4. 每个 job `timeout-minutes: 30`（共 5 处）。
+  5. workflow 级 `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` +
+     `cancel-in-progress: true`。
+  6. 新增 `Examples` job：依次 `cargo run --locked -p rsagent-agent --example
+     headless|custom_tool|end_to_end` 与 `-p rsagent-ai --example custom_provider`。
+- 本地实测（写进 job 前）：四个 example 全部 `exit 0` 且输出合理（`answer: Hello from a
+  headless agent!` / `word_count -> 4` / `end_to_end` 完整事件流 / `echo: pong`）。
+- 验收证据：
+  - workflow YAML 用 pyyaml 解析通过；`permissions:`×1、`timeout-minutes:`×5、
+    `concurrency:`×1；全部 `uses:` 均为 `@` + 40 位十六进制。
+  - 门禁（无 Rust 改动，复跑确认未受影响）：fmt 干净 / clippy 0 警告 /
+    279 通过 / rustdoc 0 告警。
+  - **远端 CI 对 `a27c91c` 7/7 job 全绿**：原 5 个（`ubuntu-latest`/`macos-latest`/
+    `windows-latest`/`Docs`/`MSRV (1.95)`）+ 新增 `Audit`、`Examples`，全部 `success`
+    （经 check-runs API 核实）。
+```
 
 ### D5 · M6 路径基准（用户可见的静默差异）
 
