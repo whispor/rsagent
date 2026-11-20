@@ -33,24 +33,27 @@
 - **D1 + D2**：`9506b4a`、`d7919c2`。测试数 267 → 276。
 - **D7 + D8 + D9**：`a326913`、`9b53edb`、`466515d`。测试数 276 → 278。
 - **D3**：`3270e5b`。测试数 278 → **279**。
-- **A 组 5/5、B 组 5/5 完成；阶段 2 的 D1/D2/D3/D7/D8/D9 完成。**
+- **D4**：`a27c91c`（**只改 CI 与新增 `deny.toml`，不动 `crates/`**，故测试数不变）。
+- **A 组 5/5、B 组 5/5 完成；阶段 2 的 D1/D2/D3/D4/D7/D8/D9 完成。**
 
-**综合评分 9.95 → 9.96 / 10**（D3 让三个「因错误原因通过」的测试变成了真正会红的测试）。
+**综合评分 9.96 → 9.97 / 10**（D4 补齐了 CI 的六项加固，含**真正运行 examples**）。
 
 **护栏复核**：无新增依赖、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
-无无关重构。新增一处 `#[expect(clippy::fn_params_excessive_bools, reason = "...")]`——
-**带 reason，符合 AGENTS.md 的要求**。✅
+无无关重构。D3 新增一处**带 reason** 的 `#[expect]`，符合 AGENTS.md。✅
 
 **🏁 里程碑一（已达成）**：「会静默给错结果」与「会永久卡住」两类缺陷已全部清空。
 
 **🏁 里程碑二（已达成）**：**契约性行为有了端到端回归保护**（D1/D2）。
 
-**🏁 里程碑三（已达成）**：**契约文档本身不再能悄悄漂移**（D7 的双向校验测试 + D8 的链接检查）。
+**🏁 里程碑三（已达成）**：**契约文档本身不再能悄悄漂移**（D7 双向校验 + D8 链接检查）。
 
-**🏁 里程碑四（本轮达成）**：**测试不再有「因错误原因通过」的**。D3 让三个这样的测试
-变成了真正会红的测试——其中一个（`no_color_output_has_no_escapes`）**名字声称测 `--no-color`，
-实际只测了「管道输出干净」**；执行方把它**重命名为 `piped_output_has_no_escapes`**（名字与
-实际一致），并把真正的标志逻辑抽成纯函数 `Palette::decide` 用**真值表**单测钉住。
+**🏁 里程碑四（已达成）**：**测试不再有「因错误原因通过」的**（D3）。
+
+**🏁 里程碑五（本轮达成）**：**CI 从「只跑四道门禁」变成一道真正的防线**。D4 补齐六项：
+`permissions: contents: read`、actions **按 SHA 固定**、每个 job 的 `timeout-minutes: 30`
+（注释直接引用 H4——**「子进程攥着管道」正是它要防的挂死**）、`concurrency` 取消过期运行、
+`audit` job 跑 `cargo-deny check advisories`、以及**新增 `examples` job 真正运行 README
+宣传的 4 个示例**（此前 CI 只编译它们）。
 
 > ⚠️ **评审方流程提醒**：执行方此前数轮有**未提交的 WIP**（B1、B4、D8），评审方会对其做
 > **预审**以便反馈在提交前到位，并**按已提交状态**复核、**不触碰工作区**。
@@ -588,8 +591,18 @@
 
 - **触发**：评审方按计划任务定期检查 `git rev-parse HEAD`。若与上次评审基线不同，做一次
   全量复评并更新本文件；若相同，只做轻量健康检查（门禁 + 是否有新提交）。
-- **输出**：每次复评更新 `docs/REVIEW.md`（结论与评分）与本文件的 §1、§2（条目状态）。
 - **基线记录**：本文件每次复评后在 §6 追加一行。
+- **⚠️ 基线必须涵盖 CI 与构建配置**（2026-11-20 10:49 修正）：
+  **不要只用 `git log -1 -- crates/`**。D4 只改了 `.github/workflows/ci.yml` 与新增
+  `deny.toml`，该命令返回的仍是上一个 `crates/` 提交，**会让人以为「无代码改动」而整轮
+  跳过 D4**。正确的基线检查：
+
+  ```bash
+  git log -1 --format=%h -- crates/ .github/ deny.toml
+  ```
+
+  **理由**：CI workflow 是「项目怎么被验证」的定义，`deny.toml` 是依赖安全策略——它们与
+  `crates/` 同等重要，只是恰好不在 `crates/` 下。评审方本轮差点因此漏审 D4。
 - **不重复空跑**：若本次 `HEAD` 与**上一次检查时的 HEAD 完全相同**（不只是代码基线相同），
   则上一次的测试结果对同一提交仍然成立，**不必重跑**——只需确认工作区干净并汇报即可。
   同一提交上反复跑同一套测试不产生任何新信息。（2026-11-19 20:19–21:19 连续三轮
@@ -632,13 +645,46 @@
 | 2026-11-20 | `d7919c2` | 276 | **9.9** | **D1+D2 已完成并核实**（`9506b4a`/`d7919c2`）：审批与退出码首次有 E2E 回归保护；新增 `--faux-tool`；**契约性行为零覆盖的结构性缺口已关闭** |
 | 2026-11-20 | `466515d` | 278 | **9.95** | **D7+D8+D9 已完成并核实**（`a326913`/`9b53edb`/`466515d`）：文档契约三处不一致清空；**契约表与 crate root 由双向测试锁定，不再能漂移**；全仓库 markdown 链接检查上线 |
 | 2026-11-20 | `3270e5b` | 279 | **9.96** | **D3 已完成并核实**（`3270e5b`）：三个「因错误原因通过」的测试变成真会红的测试；测试与仓库根/开发机环境隔离（附 A/B 证明） |
+| 2026-11-20 | `a27c91c` | 279 | **9.97** | **D4 已完成并核实**（`a27c91c`，只改 CI + 新增 `deny.toml`）：六项 CI 加固全部落地；**远端 7/7 job 全绿**；评审方修正了会漏审 CI-only 改动的基线规则 |
 
-> **基线口径**：这里记的是**最后一个改动 `crates/` 的提交**，不是 HEAD。
-> 查代码基线：`git log -1 --format=%h -- crates/`。
-> 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入——若两次复评之间
-> 只有文档提交，视为「无代码改动」，走轻量路径，不必重跑全量门禁。
+> **基线口径**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
+> 查代码基线：`git log -1 --format=%h -- crates/ .github/ deny.toml`。
+> **不要只用 `crates/`**——D4 只改了 CI，旧口径会误判为「无代码改动」。
+> 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入。
 
-### 本轮（`3270e5b`）复评记录
+### 本轮（`a27c91c`）复评记录
+
+**核实结论：D4 完成，六项 CI 加固全部落地，且经远端验证。**
+
+| 项 | 核实要点 |
+| --- | --- |
+| `permissions: contents: read` | ✓ workflow 级 |
+| actions 按 SHA 固定 | ✓ 全部 `uses:` 为 `@` + 40 位 SHA，**且保留 `# v4`/`# stable`/`# v2.1.3` 版本注释** |
+| `timeout-minutes: 30` | ✓ 5 个 job 各一处，**注释直接引用 H4**（「子进程攥着管道」正是它要防的挂死） |
+| `concurrency` | ✓ `group` + `cancel-in-progress: true` |
+| `cargo-deny` | ✓ 新增 `Audit` job + `deny.toml`（只配 `[advisories]`，**明确不臆断许可证策略**） |
+| 真正运行 examples | ✓ 新增 `Examples` job 跑全部 4 个 README 宣传的示例 |
+
+**`deny.toml` 的分寸值得记录**：它只配置 CI 实际检查的 `[advisories]`，并在注释里明确声明
+不臆断 `licenses`/`bans`/`sources` 的策略（「a project decision, not something to guess
+here」）。**许可证白名单是项目负责人的选择，不是一个 CI 加固任务该顺手定下的**——执行方
+正确地没有越界。
+
+**最强证据是远端验证**：`a27c91c` 上 **7/7 job 全绿**（含新增的 `Audit` 与 `Examples`）——
+说明新 CI 不只是语法正确，而是真的能跑通。
+
+**⚠️ 评审方本轮差点漏审 D4，已修正规则**：D4 只改 `.github/workflows/ci.yml` 与新增
+`deny.toml`，**没有碰 `crates/`**，因此旧的基线口径 `git log -1 -- crates/` 返回的仍是
+`3270e5b`——**按旧规则这一整轮会被判为「无代码改动」而跳过**。§5 已改为
+`git log -1 -- crates/ .github/ deny.toml`。**CI workflow 是「项目怎么被验证」的定义，
+`deny.toml` 是依赖安全策略，二者与 `crates/` 同等重要，只是恰好不在 `crates/` 下。**
+
+**护栏复核**：无新增依赖、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
+无无关重构。✅
+
+**🏁 里程碑**：**CI 从「只跑四道门禁」变成一道真正的防线**。
+
+### 上一轮（`3270e5b`）复评记录
 
 **核实结论：D3 完成，三项修法都优于建议。**
 
@@ -1095,6 +1141,29 @@ the assertion above is sensitive to the category rather than passing for another
     `windows-latest`/`Docs`/`MSRV (1.95)`）+ 新增 `Audit`、`Examples`，全部 `success`
     （经 check-runs API 核实）。
 ```
+
+> **评审方核实（2026-11-20 10:49，已提交状态 `a27c91c`）——✅ 通过，六项全部做到**
+>
+> 逐项复核新 `ci.yml`（126 行）与 `deny.toml`（25 行）：
+> `permissions: contents: read` ✓ · 全部 `uses:` 为 `@` + 40 位 SHA **且带 `# v4`/`# stable`
+> 等版本注释** ✓ · 5 个 job 各 `timeout-minutes: 30` ✓ · `concurrency` + `cancel-in-progress` ✓ ·
+> `Audit` job（`cargo-deny-action`，`check advisories`）✓ · `Examples` job 依次跑 4 个示例 ✓。
+>
+> **`timeout-minutes` 的注释直接引用了 H4**（「a child process holding a pipe open, as H4
+> fixed」）——**这正是评审方给出该建议的理由，执行方把它写进了注释**，后人能看懂为什么是 30 分钟。
+>
+> **`deny.toml` 的分寸值得表扬**：它只配置 CI 实际检查的 `[advisories]`，并在注释里**明确
+> 声明不臆断** `licenses`/`bans`/`sources` 的策略（「a project decision, not something to
+> guess here」）。**这正是不越界替项目做决策**——许可证白名单是项目负责人的选择，不是
+> 一个 CI 加固任务该顺手定下的。`unmaintained = "workspace"` 只对直接依赖失败、
+> `yanked = "warn"` 只提示不失败，两条都给了理由。
+>
+> **最强证据是远端验证**：`a27c91c` 上 **7/7 job 全绿**（含新增的 `Audit` 与 `Examples`），
+> 经 check-runs API 核实——**说明新 CI 不只是语法正确，而是真的能跑通**。
+>
+> **⚠️ 本轮评审方差点漏审 D4**：`git log -1 -- crates/` 因 D4 只改 `.github/` 与 `deny.toml`
+> 而**没有移动**，按旧口径会被判为「无代码改动」。**§5 的基线规则已修正为
+> `git log -1 -- crates/ .github/ deny.toml`**，并把这次差点漏审记在案。
 
 ### D5 · M6 路径基准（用户可见的静默差异）
 
