@@ -973,7 +973,7 @@ README。成本约 0.5 天。
 
 ### D7 · 🆕 `STABILITY.md` 的公开 API 清单与实际导出**范围不一致**
 
-- **状态**：待办 · **成本**：约 0.5 天 · **影响**：中（契约歧义，与 A1/A5 同类）
+- **状态**：已完成 (466515d) · **成本**：约 0.5 天 · **影响**：中（契约歧义，与 A1/A5 同类）
 - **问题（2026-11-20 06:49 评审方实测计数）**：
 
   [STABILITY.md](../STABILITY.md) 的**正文**说：
@@ -1006,6 +1006,31 @@ README。成本约 0.5 天。
 - **验收**：选 (b) 时，加一个测试或 CI 检查：`STABILITY.md` 表中列出的名字必须都能在
   对应 crate root 找到（防止表格写了不存在的项）；反之，未列出的导出应带 `#[doc(hidden)]`。
 - **关联**：REVIEW.md §5 的「文档承诺与实际行为不符」主题；A1、A5。
+
+```
+- 状态：已完成 (466515d)
+- 采用 (a) 与 (b) 的合体：让表格穷尽（(a) 的诚实），并把「是否契约」交给代码 + 测试
+  （(b) 的「更彻底做法」）——穷尽消除正文/表格的双口径，测试消除 (a) 的漂移风险。
+- STABILITY.md「Public API」节重写：
+  - 正文改为「契约 = 根 `pub use` 的**全部**名字，减去标 `#[doc(hidden)]` 的」；
+  - 表格由 2 行长条目改为按用途分组的 15 行，逐项列出全部 **79** 项
+    （`rsagent-ai` 26 + `rsagent-agent` 53），与两个 `lib.rs` 的 `pub use` 一一对应。
+- 新增检查（crates/rsagent/tests/docs.rs）：`the_public_api_table_matches_the_crate_roots`
+  解析两个 crate root 与表格，断言二者集合**相等**——既查「表列了不存在的项」，也查
+  「导出了却未列」；并遵守 `#[doc(hidden)]`（隐藏项从契约集中剔除）。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 278 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+- **检查有效性已实测**（三种情形，均当场还原）：
+  1. 表中把 `CancelToken` 误写成 `CancelTokenn` → 失败，同时报
+     `exported but not in the table: ["CancelToken"]` 与
+     `in the table but not exported: ["CancelTokenn"]`；
+  2. 给 `pub use cancel::CancelToken;` 加 `#[doc(hidden)]` 但不改表 → 失败，报
+     `in the table but not exported: ["CancelToken"]`（证明逃逸口已接线）；
+  3. 两者还原 → 通过。
+```
 
 ### D8 · 🆕 `STABILITY.md` 有 4 处断链，且都在契约表里
 
