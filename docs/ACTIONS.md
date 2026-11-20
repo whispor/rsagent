@@ -795,6 +795,8 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 
 ### D2 · 退出码的 E2E 覆盖
 
+- **状态**：已完成 (d7919c2)
+
 **契约**（README「Exit codes」节，STABILITY 列为 Semver）：
 
 | 码 | 含义 | 建议用例 |
@@ -809,6 +811,30 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
   去「修正」一个未定行为）。
 - `--json` 模式下失败**不改变退出码语义**，而是以 `error` 事件呈现——README 明确承诺
   「`--json` keeps its machine contract」，应有一条测试断言这一点。
+
+```
+- 状态：已完成 (d7919c2)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 276 通过 / 0 失败（较上轮 +4）
+  - cargo doc ...                    → 0 告警
+  - 新增测试（crates/rsagent/tests/cli.rs）：
+    a_model_error_exits_1、hitting_max_turns_exits_1、a_bad_log_path_exits_2、
+    json_keeps_its_exit_code_on_failure
+- 覆盖情况对照 D2 表：
+  - `1` 模型级失败：`--print hi --base-url http://127.0.0.1:1/v1`（无 key）→ 连接被拒 → 退 1；
+  - `1` 触到 turn 上限：`--max-turns 1` + 一次工具调用 → `MaxTurnsExceeded` → 退 1；
+  - `2` `--log` 路径不可用 → 在启动任何来源前 `exit 2`（`could not open log`）；
+  - `2` 缺 key 已由既有 `a_print_run_without_an_api_key_exits_nonzero` 覆盖（断言退 2）；
+  - `--json` 失败：退 **1**（与 `--print` 一致），并在 stdout 出现 `"stopReason":"error"`
+    事件——锁住「机器契约不变、只改呈现方式」。
+- `abort` 在 `--print` 下的退出码（D2「额外值得锁」第 1 条）：**已核实**——SIGINT 走
+  `agent.rs:400`（`StreamOutcome::Cancelled`）与 `:422`（`StopReason::Aborted`），两处都
+  `return Ok(())`，即「abort 不是错误」，故进程退 **0**。**未加测试**：非交互场景下跨平台
+  向子进程发 SIGINT 需要新依赖（护栏 #1 禁止），且评审方明确要求「确认后再写、不要先写
+  测试去修正未定行为」。**留作观察**：这与 README「`0` = 产出了答案」的措辞略有出入。
+```
 
 ### D3 · 修掉空转与不隔离的测试（低成本，可顺手做）
 
