@@ -1009,7 +1009,7 @@ README。成本约 0.5 天。
 
 ### D8 · 🆕 `STABILITY.md` 有 4 处断链，且都在契约表里
 
-- **状态**：待办 · **成本**：约 5 分钟 · **影响**：中（契约文档的导航在最关键处失效）
+- **状态**：已完成 (a326913) · **成本**：约 5 分钟 · **影响**：中（契约文档的导航在最关键处失效）
 - **问题（2026-11-20 08:19 评审方实测）**：对全仓库 17 个 markdown 文件做了相对链接
   完整性检查，**只有 `STABILITY.md` 有断链，共 4 处，且全在「Public API」表内**：
 
@@ -1040,9 +1040,25 @@ README。成本约 0.5 天。
 - **关联**：D7（同一张表的另一个问题：范围不一致）。**两处都在 STABILITY 的契约表里，
   建议一起修。**
 
+```
+- 状态：已完成 (a326913)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 277 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+  - 4 处路径前缀已改（`../README.md`→`README.md` ×3；`EXTENSIBILITY.md`→`docs/EXTENSIBILITY.md`）；
+    `grep -n "\.\./README" STABILITY.md` 无结果。
+  - 新增检查（crates/rsagent/tests/docs.rs）：`every_relative_markdown_link_resolves`
+    遍历仓库全部 `.md`（跳过 target/.git），断言每个相对链接目标存在；跳过代码块、
+    外部 URL、`mailto:` 与纯锚点。
+  - **检查有效性已实测**：把链接改回 `../README.md` 后该测试失败并报出 3 处（第 4 处
+    `EXTENSIBILITY.md` 未一起改，故未报），随后还原。
+```
+
 ### D9 · 🆕 `abort` 退 0，但 README 说 `0` = 「产出了答案」
 
-- **状态**：待办（**由执行方在 D2 中发现，评审方已核实并独立成条**）
+- **状态**：已完成 (9b53edb)（**由执行方在 D2 中发现，评审方已核实并独立成条**）
 - **成本**：约 10 分钟（改措辞）或约 0.5 天（改行为，若决定改） · **影响**：低中
 - **问题（评审方 2026-11-20 09:19 核实）**：README「Exit codes」写
 
@@ -1067,6 +1083,27 @@ README。成本约 0.5 天。
 - **验收**：README 的 `0` 一行与 `agent.rs:400`/`:422` 的实际行为一致；若选 (b)，需在
   CHANGELOG 记 Breaking。
 - **关联**：D2（同一组退出码契约）、A1/A5/D7/D8（同属「文档承诺 vs 实际」这一类）。
+
+```
+- 状态：已完成 (9b53edb)
+- 采用方案 (a)（改措辞，不改行为）：
+  - README「Exit codes」引导句：`exits non-zero when the run did not produce a usable
+    answer` → `when the run failed or was cut short`；
+  - 表格 `0` 行：`The run finished and the model produced an answer.` →
+    `The run finished: the model produced an answer, or the user aborted it (Ctrl-C).`；
+  - 表格后补一句：abort 退 0 是**有意**的（用户主动行为，非失败），脚本不应据此误判。
+- 行为未改动（退出码是 Semver 契约）：`agent.rs:400`（`StreamOutcome::Cancelled`）与
+  `:422-428`（`StopReason::Aborted`）两处仍 `return Ok(())`。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 277 通过 / 0 失败（无新增测试）
+  - cargo doc ...                    → 0 告警
+- **未加测试**：abort 行为已写在 `Agent::prompt` 的文档注释里（「A user abort is not an
+  error: the run ends with `Ok(())`」），而要端到端锁住它需在流式进行中竞态触发取消
+  （`prompt` 会在入口 `cancel.reset()`），或向子进程发 SIGINT（护栏 #1 禁止新依赖）。
+  按评审方「先确认行为、再写测试」的要求，此处只改措辞、不加易 flaky 的测试。
+```
 
 ---
 
