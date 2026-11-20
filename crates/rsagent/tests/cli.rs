@@ -1692,3 +1692,115 @@ fn interactive_a_remembers_the_decision() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// --- Exit codes (ACTIONS.md D2) --------------------------------------------------------
+//
+// README's "Exit codes" section is a published contract (listed in STABILITY.md), so each
+// code gets a test that locks it.
+
+#[test]
+fn a_model_error_exits_1() {
+    // A run-time model failure exits 1 (not 2), so a script can tell it from a usage error.
+    // A closed loopback port makes the request fail fast, with no key needed.
+    let dir = temp_dir("exit-model-error");
+    let output = rsagent()
+        .current_dir(&dir)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("RSAGENT_API_KEY")
+        .args(["--print", "hi", "--base-url", "http://127.0.0.1:1/v1"])
+        .output()
+        .expect("run rsagent");
+
+    assert_eq!(output.status.code(), Some(1), "a model failure exits 1");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("model error"),
+        "the failure must be reported on stderr: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn hitting_max_turns_exits_1() {
+    // Hitting the turn cap is a run-time failure (exit 1), not a usage error.
+    let dir = temp_dir("exit-max-turns");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--max-turns",
+            "1",
+            "--faux-tool",
+            "write_file:{\"path\":\"out.txt\",\"content\":\"hi\"}",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "hitting the turn cap exits 1"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_bad_log_path_exits_2() {
+    // `--log` is an explicit request for a trace, so an unusable path fails fast — before
+    // any source is spawned — as a usage error (exit 2).
+    let dir = temp_dir("exit-bad-log");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "hi",
+            "--log",
+            "no-such-dir/trace.jsonl",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert_eq!(output.status.code(), Some(2), "a bad --log path exits 2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("could not open log"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn json_keeps_its_exit_code_on_failure() {
+    // `--json` changes the *presentation* of a failure — an error event on stdout — not the
+    // exit-code contract: a model failure still exits 1, exactly as in `--print` mode.
+    let dir = temp_dir("exit-json-error");
+    let output = rsagent()
+        .current_dir(&dir)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("RSAGENT_API_KEY")
+        .args([
+            "--print",
+            "hi",
+            "--json",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a failure exits 1 under --json too"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"stopReason\":\"error\""),
+        "the failure must surface as an error event on stdout: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
