@@ -729,6 +729,8 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 
 ### D1 · 审批行为的 E2E 覆盖（最高优先）
 
+- **状态**：已完成 (9506b4a)
+
 **现状**：`crates/rsagent/tests/cli.rs` 已有 52 个测试，但**没有一个**覆盖审批。
 审批是「bash 不沙箱化」这一安全模型下的**唯一防线**，却没有回归保护。
 
@@ -762,6 +764,34 @@ B5（截断流丢 tool call）——这五条是本项目最危险的一类，�
 
 **注意**：`--print` 下审批**不询问**而是直接拒绝，所以用例 1/3/4 不需要喂 stdin；
 用例 6 需要交互，建议用 `--json` 断言事件流而不是解析终端文本。
+
+```
+- 状态：已完成 (9506b4a)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 272 通过 / 0 失败（较上轮 +5）
+  - cargo doc ...                    → 0 告警
+  - 新增测试（crates/rsagent/tests/cli.rs）：
+    print_without_yes_denies_a_write、print_with_yes_runs_a_write、
+    allow_write_permits_write_but_not_bash、allow_network_permits_a_web_tool、
+    interactive_a_remembers_the_decision
+- 前置：`--faux` 原先只能回纯文本，**无法从 CLI 驱动工具调用**，审批路径因此测不了。
+  为解锁本任务，新增 `--faux-tool <SPEC>`（可重复，`SPEC` = `name` 或 `name:JSON`）：
+  每条脚本化一次工具调用，末尾补一条文本回复收尾。`--print` 与 REPL 两种模式都支持
+  （REPL 里脚本在首个 prompt 回放一次，队列空了再退回文本）。
+- 覆盖情况对照 D1 表：
+  - `--print` 无 `--yes` → 拒绝（`skipped write_file: approval required`），文件未落盘；
+  - `--yes` → 放行并落盘；
+  - `--allow write` → 放行 write、仍拒 bash（exec）；
+  - `--allow network` → 放行 web 工具（**锁 A1**：去掉该类别即被拒，证明断言对类别敏感）；
+  - 交互输入 `a` → 放行并记住（`--log` 事件流里 `toolApprovalRequest` **恰好 1 条**）。
+  - D1 表第 5 条（未知类别 exit 2）**已由既有测试 `an_unknown_permission_category_is_rejected`
+    覆盖**，未重复添加。
+- 文档同步：README（`--faux-tool` 用法与 flags 表）、CHANGELOG（Added）。
+- 说明：本任务的核心是补测试；`--faux-tool` 是为「审批可被离线驱动」而加的最小机制，
+  非新抽象（一个 CLI 参数 + 两个纯函数），符合护栏 #1/#2。
+```
 
 ### D2 · 退出码的 E2E 覆盖
 
