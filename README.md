@@ -563,14 +563,17 @@ append-mode session.
 
 ## Exit codes
 
-In `--print` mode the process exits non-zero when the run did not produce a usable
-answer, so scripts and CI can detect failures:
+In `--print` mode the process exits non-zero when the run failed or was cut short, so
+scripts and CI can detect failures:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | The run finished and the model produced an answer. |
+| `0` | The run finished: the model produced an answer, or the user aborted it (`Ctrl-C`). |
 | `1` | A model-level failure at run time (network error, provider error) or the turn limit was hit. |
 | `2` | A usage or configuration error caught before the run: bad flags, an unreadable `--log` path, a missing API key for the default endpoint, or a failed subcommand. |
+
+An abort exits `0` on purpose: it is a deliberate act by the user, not a failure, so a
+script that treats a non-zero code as "something went wrong" is not misled by a `Ctrl-C`.
 
 A missing API key is detected before anything is sent and exits `2` with the exact
 variable to set. `--json` keeps its machine contract instead, so there the failure
