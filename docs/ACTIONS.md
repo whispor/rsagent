@@ -1657,6 +1657,9 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 | 全仓库 markdown 相对链接完整性 | 扫 17 个 `.md` 的全部相对链接 | ✅ **D8 修好后 0 处断链**（`tests/docs.rs` 已把它变成 CI 检查） |
 | README 说两个 HTML 图解页含「**真实的函数名与事件名**」 | 从两个 `.html` 提取标识符，逐个比对源码（2026-11-20 11:49） | ✅ **全部命中**：15 个函数名（`run_turns`/`run_loop`/`run_one`/`stream_turn`/`run_tool_calls`/`execute_one`/`check_approval`/`probe_health`/`compact_context`/`build_context`/`inject_steering`/`resolve_within`/`truncate_result` 等）与**全部 14 个 `AgentEvent` 变体**都仍存在于源码；`ToolUse` 亦为真实的 `StopReason::ToolUse` |
 | **D6**：平台差异是否真的只在 `platform.rs` | 扫全树 `#[cfg(`，逐个确认是否在测试模块内（2026-11-20 13:19） | ✅ **不变量成立**：业务代码中除 `platform.rs`（3 处）外**没有任何平台 `#[cfg]`**。`subprocess.rs:184/190` 的两处在 `#[cfg(test)] mod tests` 内，是跨平台测试夹具（`cmd /C start` vs `sh -c sleep`），**不属业务代码**。 |
+| **§2.4 不变量 1**：分层是否单向 | 扫三个 `Cargo.toml` **全文**（含 `dev-`/`build-dependencies`）的 rsagent-* 依赖边（2026-11-20 16:19） | ✅ **成立且由编译器强制**：`rsagent-ai` 无 rsagent-* 依赖；`rsagent-agent` 只依赖 `rsagent-ai`；`rsagent` 依赖下面两层。**测试依赖里也没有向上边**。因为这是 Cargo 依赖边，不声明就无法 `use`——**不变量 1 不是君子协定，是编译错误**。 |
+| **§2.4 不变量 3**：工具失败用 `Err(String)` | 读 `Tool::execute` 的签名（2026-11-20 16:19） | ✅ **由类型强制**：`execute` 返回 `Result<ToolResult, String>`，把失败塞进 `Ok` 的 `content` 需要刻意为之。**编译器层面成立。** |
+| **§2.4 不变量 7**：公开 API 有文档注释 | 确认 CI 的 `Docs` job 与 lint（2026-11-20 16:19） | ✅ **由门禁强制**：`missing_docs` lint + `RUSTDOCFLAGS="-D warnings"` 的 `Docs` job；`missing_errors_doc` 亦已开启（见 `Cargo.toml` 的 `[workspace.lints]`）。 |
 | **D15**：默认 `exec` 是否真是「最严」 | 比对 `tool.rs` 默认值与 4 个类别的语义（2026-11-20 12:49） | ❌ **不成立** → 已立为 **E6**（类别非全序，`--allow exec` 会放行未分类工具）。**这是本轮唯一发现的决策日志漂移。** |
 
 **一处刻意不记的观察**：`rsagent.toml` 的 `only` 字段是真实存在的（`SourceConfig.only`），
