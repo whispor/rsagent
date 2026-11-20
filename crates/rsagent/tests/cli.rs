@@ -4,10 +4,31 @@
 //! renderer — which the crate-level tests do not cover.
 
 use std::process::Command;
+use std::sync::OnceLock;
 
-/// A command that runs the binary built for this test run.
+/// The empty working directory shared by tests that do not set their own.
+///
+/// Created once per test process, so the default-cwd tests do not each litter the temp
+/// directory. A test that writes files sets its own with `.current_dir(...)`.
+fn default_cwd() -> &'static std::path::Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("rsagent-cli-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the default working directory");
+        dir
+    })
+}
+
+/// A command that runs the binary built for this test run, isolated from the repository.
+///
+/// The working directory is an empty temp dir, so a project `.env` or `rsagent.toml` at the
+/// repo root cannot leak into a test, and `RSAGENT_USER_CONFIG` is cleared so a developer's
+/// user-level config cannot change what a test sees.
 fn rsagent() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_rsagent"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rsagent"));
+    command.current_dir(default_cwd());
+    command.env_remove("RSAGENT_USER_CONFIG");
+    command
 }
 
 #[test]
@@ -665,23 +686,29 @@ fn a_config_driven_local_source_is_listed() {
 
 /// The `mcp_echo` example binary, if it was built next to this test binary.
 fn mcp_echo_program() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let profile = exe.parent()?.parent()?;
     let name = if cfg!(windows) {
         "mcp_echo.exe"
     } else {
         "mcp_echo"
     };
-    let path = profile.join("examples").join(name);
-    path.exists().then_some(path)
+    // Cargo may place the test binary under `deps/` or under `build/<crate>/<hash>/out/`,
+    // so search upward for a sibling `examples/` directory instead of a fixed depth.
+    let exe = std::env::current_exe().ok()?;
+    for dir in exe.ancestors() {
+        let candidate = dir.join("examples").join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 #[test]
 fn a_config_driven_mcp_stdio_source_is_listed() {
-    let Some(program) = mcp_echo_program() else {
-        eprintln!("skipping: the `mcp_echo` example was not built");
-        return;
-    };
+    // Not a silent skip: a missing example is a real gap, and a plain `cargo test` builds
+    // the examples, so this only trips when someone ran a filtered target without them.
+    let program = mcp_echo_program()
+        .expect("the `mcp_echo` example must be built first; run `cargo build --examples`");
     let dir = temp_dir("config-mcp");
     // Escape backslashes so the path is a valid TOML basic string on Windows.
     let command = program.display().to_string().replace('\\', "\\\\");
@@ -883,7 +910,11 @@ fn json_without_print_is_rejected() {
 }
 
 #[test]
-fn no_color_output_has_no_escapes() {
+fn piped_output_has_no_escapes() {
+    // stdout is a pipe here, so the palette is off whatever the flags say — this pins the
+    // "redirected output stays clean" promise (and that `--no-color` is accepted). The
+    // cases that need a terminal (`--no-color`, `NO_COLOR`, a real TTY) live in `Palette`'s
+    // unit test in `render.rs`, because a subprocess test cannot present one.
     let output = rsagent()
         .args(["--faux", "--print", "hi", "--no-color"])
         .output()

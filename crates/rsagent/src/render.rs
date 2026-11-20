@@ -44,9 +44,19 @@ impl Palette {
     /// Decide whether to colorize output.
     pub(crate) fn detect(choice: ColorChoice) -> Self {
         let no_color_env = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+        Self::decide(choice, no_color_env, std::io::stdout().is_terminal())
+    }
+
+    /// The decision itself, with its three inputs passed in so it can be tested without a
+    /// terminal: color needs `Auto`, an unset `NO_COLOR`, *and* a stdout that is a TTY.
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "the three inputs are genuinely independent; a two-variant enum per flag would only rename them"
+    )]
+    fn decide(choice: ColorChoice, no_color_env: bool, stdout_is_tty: bool) -> Self {
         let want_color = choice == ColorChoice::Auto && !no_color_env;
         Palette {
-            enabled: want_color && std::io::stdout().is_terminal(),
+            enabled: want_color && stdout_is_tty,
         }
     }
 
@@ -554,4 +564,34 @@ fn looks_outside_cwd(cwd: &Path, path: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ColorChoice, Palette};
+
+    /// The color decision, exercised directly: a subprocess test cannot reach the cases
+    /// that need a TTY, so the truth table is pinned here instead.
+    #[test]
+    fn color_needs_auto_no_no_color_and_a_tty() {
+        let enabled =
+            |choice, no_color_env, is_tty| Palette::decide(choice, no_color_env, is_tty).enabled;
+
+        // Only `Auto` + no `NO_COLOR` + a TTY colorizes.
+        assert!(enabled(ColorChoice::Auto, false, true));
+
+        // Each of the three conditions is necessary on its own.
+        assert!(
+            !enabled(ColorChoice::Never, false, true),
+            "`--no-color` wins"
+        );
+        assert!(!enabled(ColorChoice::Auto, true, true), "`NO_COLOR` wins");
+        assert!(
+            !enabled(ColorChoice::Auto, false, false),
+            "a pipe is not a TTY"
+        );
+
+        // And they are not accidentally `and`-ed the wrong way.
+        assert!(!enabled(ColorChoice::Never, true, false));
+    }
 }
