@@ -939,6 +939,8 @@ the assertion above is sensitive to the category rather than passing for another
 
 ### D3 · 修掉空转与不隔离的测试（低成本，可顺手做）
 
+- **状态**：已完成 (3270e5b) · **成本**：约 1 小时
+
 - `no_color_output_has_no_escapes`：在 `Command::output()` 下 stdout 本就不是 TTY，
   `Palette` 早已关闭，**删掉 `--no-color` 也会通过**。应改为直接断言 `NO_COLOR` 环境变量
   的行为，或构造一个伪 TTY。
@@ -947,6 +949,33 @@ the assertion above is sensitive to the category rather than passing for another
   建议：构造器统一 `current_dir` 到临时目录，并显式 `env_remove("RSAGENT_USER_CONFIG")`。
 - `mcp-stdio` 示例缺失时测试**静默 `return`**，仍算通过。应显式 skip（如打印原因并
   `return` 前断言文件存在）或先构建 examples。
+
+```
+- 状态：已完成 (3270e5b)
+- 三处逐条修法：
+  1. 颜色测试：把判定抽成可测的 `Palette::decide(choice, no_color_env, stdout_is_tty)`
+     （`detect` 只负责采三个输入并转调），新增单元测试
+     `color_needs_auto_no_no_color_and_a_tty` 钉住真值表——只有 `Auto` + 无 `NO_COLOR`
+     + TTY 才着色，且三者各自必要。子进程测试改名
+     `piped_output_has_no_escapes`，明确它钉的是「重定向输出保持干净」，TTY 相关用例
+     归单元测试（子进程测试无法呈现 TTY）。
+  2. 隔离：`rsagent()` 统一 `current_dir` 到一个按进程缓存的空临时目录（`OnceLock`，
+     避免每次调用都新建目录），并 `env_remove("RSAGENT_USER_CONFIG")`。仓库根的
+     `.env`/`rsagent.toml` 与开发机 user config 都进不了测试。
+  3. mcp-stdio：`mcp_echo_program()` 改为从 `current_exe()` 逐级向上找同级的
+     `examples/`（原先固定 `parent().parent()`，在 `build/<crate>/<hash>/out/` 下找不到），
+     并把「找不到」从静默 `return` 改成 `expect` 硬失败。`cargo test` 默认会构建
+     examples，故普通测试不会误触。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 279 通过 / 0 失败（较上轮 +1：新增颜色真值表单元测试）
+  - cargo doc ...                    → 0 告警
+  - **隔离 A/B 实测**：构造一个把内置集收窄到只剩 `read_file` 的 user config，
+    设 `RSAGENT_USER_CONFIG` 后跑 `-p rsagent --test cli` → **61/61 通过**（隔离生效）；
+    同一个 config 直接 `cargo run -- tools list`（未隔离）→ **只列出 1 个工具**，
+    证明该 config 确实会污染测试（无 `env_remove` 时相关断言会红）。
+```
 
 ### D4 · CI 加固（低成本）
 
