@@ -879,12 +879,46 @@ README。成本约 0.5 天。
   对应 crate root 找到（防止表格写了不存在的项）；反之，未列出的导出应带 `#[doc(hidden)]`。
 - **关联**：REVIEW.md §5 的「文档承诺与实际行为不符」主题；A1、A5。
 
+### D8 · 🆕 `STABILITY.md` 有 4 处断链，且都在契约表里
+
+- **状态**：待办 · **成本**：约 5 分钟 · **影响**：中（契约文档的导航在最关键处失效）
+- **问题（2026-11-20 08:19 评审方实测）**：对全仓库 17 个 markdown 文件做了相对链接
+  完整性检查，**只有 `STABILITY.md` 有断链，共 4 处，且全在「Public API」表内**：
+
+  | 行 | 现在的链接 | 解析结果 | 应为 |
+  | --- | --- | --- | --- |
+  | 40 | `../README.md#tool-sources-rsagenttoml` | ✗ `..` 逃出仓库 | `README.md#tool-sources-rsagenttoml` |
+  | 41 | `../README.md#json-output` | ✗ 同上 | `README.md#json-output` |
+  | 42 | `../README.md#event-log` | ✗ 同上 | `README.md#event-log` |
+  | 43 | `EXTENSIBILITY.md` | ✗ 实际在 `docs/` | `docs/EXTENSIBILITY.md` |
+
+  （三个锚点本身**是有效的**——评审方已核对 README 的标题，GitHub 的锚点算法会去掉
+  `rsagent.toml` 里的点号，故 `#tool-sources-rsagenttoml` 正确。**坏的只是路径前缀**。）
+
+- **根因（推断）**：`STABILITY.md` 现在在**仓库根目录**，但链接是按「它在 `docs/` 里」
+  写的。同目录的 `docs/ARCHITECTURE.md`、`docs/EXTENSIBILITY.md` 用 `../README.md`
+  **是正确的**（它们确实在 `docs/` 下）。所以很可能是 `STABILITY.md` 从 `docs/` 移到
+  根目录时，链接没跟着改。
+- **为什么不是小事**：这 4 行是**定义公开契约的那张表**。其中两行（`--json` schema、
+  `--log` trace schema）明说「契约在 `README#json-output` / `#event-log`」——**而读者
+  从契约文档点不过去**。想确认 `--json` 字段承诺的人，正好在这里被卡住。
+- **为什么一直没被发现**：`cargo doc -D warnings` 只校验 **Rust intra-doc 链接**，
+  **不校验 markdown 文件之间的链接**。CI 的 `Docs` job 因此对这类断链完全无感。
+- **方案**：改 4 处路径前缀即可（`../README.md` → `README.md`；`EXTENSIBILITY.md` →
+  `docs/EXTENSIBILITY.md`）。**建议顺带加一条 CI 检查**（几行脚本）：所有 `.md` 里的
+  相对链接目标必须存在——这类断链目前没有任何门禁能拦，加一次就永久免疫。
+- **验收**：`grep -n "\.\./README" STABILITY.md` 无结果；全仓库 markdown 相对链接检查
+  通过。
+- **关联**：D7（同一张表的另一个问题：范围不一致）。**两处都在 STABILITY 的契约表里，
+  建议一起修。**
+
 ---
 
 **评审方对阶段 2 的总评**：**D1 是唯一真正重要的一项**——它保护的是「审批是唯一防线」
-这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。**D7 修的是「契约到底包含
-什么」这个前提**——它不影响运行，但影响所有下游用户对「能不能依赖」的判断，且与 A1/A5
-同属本项目最高价值的一类缺陷。D3/D4 是低成本清理。D5 是用户可见的行为修正。
+这个安全模型本身。D2 保护的是已写进 STABILITY 的公开契约。**D7 与 D8 修的都是
+「契约文档本身」**——D7 是它说错了范围，D8 是它指不到地方；两者都不影响运行，但都影响
+下游用户对「能不能依赖」的判断，且与 A1/A5 同属本项目最高价值的一类缺陷。
+D3/D4 是低成本清理。D5 是用户可见的行为修正。
 D6 需要你决策。**建议按 D1 → D2 → D7 → D3/D4 → D5 → D6 推进。**
 
 ---
