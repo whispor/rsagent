@@ -1,0 +1,25 @@
+# cargo-deny configuration.
+#
+# CI runs `cargo deny check advisories` (see .github/workflows/ci.yml), so only the
+# `[advisories]` section below is consulted. The `licenses` / `bans` / `sources` checks are
+# deliberately not configured — their policy (a license allow-list in particular) is a
+# project decision, not something to guess here. A local `cargo deny check` therefore only
+# has the advisory policy to go on.
+#
+# cargo-deny 配置。CI 只跑 `cargo deny check advisories`（见 .github/workflows/ci.yml），
+# 故仅下面的 `[advisories]` 段生效。`licenses` / `bans` / `sources` 检查有意未配置——其策略
+# （尤其是许可证白名单）属于项目决策，不应在此臆断。因此本地 `cargo deny check` 只有本策略可依。
+
+[advisories]
+# A known vulnerability in any dependency fails the build — that is the point of this check.
+# 任何依赖上的已知漏洞都会让构建失败——这正是本检查的目的。
+#
+# An unmaintained crate fails only when it is a direct dependency of a workspace crate
+# (cargo-deny's `workspace` default): that is one we can act on. A transitive one we cannot
+# replace is not worth a red build.
+# 未维护的 crate 仅在它是 workspace crate 的直接依赖时才失败（cargo-deny 的 `workspace`
+# 默认值）：那是我们能处理的。替换不了的间接依赖不值得让构建变红。
+unmaintained = "workspace"
+# Resolving to a yanked version is worth surfacing, but not worth failing on by itself.
+# 解析到被 yank 的版本值得提示，但本身不值得失败。
+yanked = "warn"

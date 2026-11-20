@@ -5,6 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# A second push to the same ref makes the first run's result stale, so cancel it instead of
+# paying for a second full three-platform matrix.
+# 同一 ref 连推两次时，前一次的结果已无意义——取消它，不再多跑一套三平台矩阵。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# CI only reads the repository. Pinning the token to `read` means a poisoned build script in
+# a dependency cannot use it to write back to the repo.
+# CI 只需要读仓库。把 token 限成只读，被投毒的依赖构建脚本就无法用它写回仓库。
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -12,6 +25,10 @@ jobs:
   check:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # A job that hangs (e.g. a child process holding a pipe open, as H4 fixed) must fail
+    # fast rather than run to GitHub's six-hour ceiling. 30 minutes is far above a normal run.
+    # 挂住的 job（例如 H4 修过的「子进程攥着管道」）应尽快失败，而不是跑到 GitHub 的 6 小时上限。
+    timeout-minutes: 30
     strategy:
       # One platform going red must not hide the others' results.
       # 一个平台失败不应掩盖另外两个的结果。
@@ -19,13 +36,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint
@@ -41,12 +58,13 @@ jobs:
   docs:
     name: Docs
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build docs (warnings denied)
         run: cargo doc --workspace --no-deps --locked
         env:
@@ -60,11 +78,49 @@ jobs:
   msrv:
     name: MSRV (1.95)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install MSRV toolchain
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Check at MSRV
         run: cargo check --workspace --all-targets --locked
+
+  # README advertises these examples as runnable entry points. Clippy only *compiles* them,
+  # so a runtime regression would ship unnoticed; run them here. They are offline and need
+  # no API key, so this costs seconds.
+  # README 把这些 example 宣传为可直接运行的入口。clippy 只「编译」它们，运行期回归不会被
+  # 发现；故在此真正运行。它们离线、无需 API key，只需几秒。
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Run the examples
+        run: |
+          cargo run --locked -p rsagent-agent --example headless
+          cargo run --locked -p rsagent-agent --example custom_tool
+          cargo run --locked -p rsagent-agent --example end_to_end
+          cargo run --locked -p rsagent-ai --example custom_provider
+
+  # A RUSTSEC advisory against the reqwest/rustls/tokio chain would otherwise go unnoticed.
+  # The policy lives in deny.toml; only the `advisories` check runs, so no license allow-list
+  # is needed. 依赖链一旦出 RUSTSEC 公告，否则项目不会知道。策略见 deny.toml；只跑
+  # `advisories` 检查，因此无需维护许可证白名单。
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Audit dependencies for known advisories
+        uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          command: check advisories
