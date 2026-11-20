@@ -1607,6 +1607,8 @@ E6 与 E1 也在这条线上，**建议一起修**。E5 可以在任何一次顺
 | README 的 `skill.toml` 示例字段是否都真实存在 | 比对 `skill.rs::ToolConfig`（6 字段） | ✅ 完全一致：`name`/`description`/`command`/`args`/`parameters`/`requires_approval` |
 | 全仓库 markdown 相对链接完整性 | 扫 17 个 `.md` 的全部相对链接 | ✅ **D8 修好后 0 处断链**（`tests/docs.rs` 已把它变成 CI 检查） |
 | README 说两个 HTML 图解页含「**真实的函数名与事件名**」 | 从两个 `.html` 提取标识符，逐个比对源码（2026-11-20 11:49） | ✅ **全部命中**：15 个函数名（`run_turns`/`run_loop`/`run_one`/`stream_turn`/`run_tool_calls`/`execute_one`/`check_approval`/`probe_health`/`compact_context`/`build_context`/`inject_steering`/`resolve_within`/`truncate_result` 等）与**全部 14 个 `AgentEvent` 变体**都仍存在于源码；`ToolUse` 亦为真实的 `StopReason::ToolUse` |
+| **D6**：平台差异是否真的只在 `platform.rs` | 扫全树 `#[cfg(`，逐个确认是否在测试模块内（2026-11-20 13:19） | ✅ **不变量成立**：业务代码中除 `platform.rs`（3 处）外**没有任何平台 `#[cfg]`**。`subprocess.rs:184/190` 的两处在 `#[cfg(test)] mod tests` 内，是跨平台测试夹具（`cmd /C start` vs `sh -c sleep`），**不属业务代码**。 |
+| **D15**：默认 `exec` 是否真是「最严」 | 比对 `tool.rs` 默认值与 4 个类别的语义（2026-11-20 12:49） | ❌ **不成立** → 已立为 **E6**（类别非全序，`--allow exec` 会放行未分类工具）。**这是本轮唯一发现的决策日志漂移。** |
 
 **一处刻意不记的观察**：`rsagent.toml` 的 `only` 字段是真实存在的（`SourceConfig.only`），
 但 README 只在正文提到「`--tools` replaces a built-in source's `only`」，**未放进示例**。
@@ -1618,3 +1620,9 @@ E6 与 E1 也在这条线上，**建议一起修**。E5 可以在任何一次顺
 过期，没有任何东西会报警**。评审方 2026-11-20 实测两份 HTML 仍然准确（见上表），
 **但这是一个将来可能悄悄漂移的点**。若将来 HTML 需要维护，可考虑把「HTML 中引用的
 `crate::` 符号必须存在」也纳入 `tests/docs.rs`；**当前不建议为此新增工作**，仅记录。
+
+**另一处措辞不精确（非缺陷，不建议改）**：`AGENTS.md` 写「Platform differences
+(**the only `#[cfg]` in the tree**)」，字面上不准确——`#[cfg(test)]` 遍布各文件，
+`subprocess.rs` 的测试夹具还有两处 `#[cfg(windows)]`/`#[cfg(not(windows))]`。
+**但 D6 的实质不变量（业务代码不携带平台 `#[cfg]`）是成立的**（已核实，见上表），
+读者也不会被误导成「`#[cfg(test)]` 被禁」。**属措辞松散，不值得开任务。**
