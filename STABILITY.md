@@ -37,10 +37,10 @@ fails the build. · 一个 crate 的公开 API 就是其根
 | `rsagent-ai` types (`Message`, `ContentBlock`, `Context`, `ToolSpec`, `StreamEvent`, `Model`, `Models`, `Provider`, `StreamOptions`, `Usage`, `StopReason`, `ThinkingLevel`, `ErrorReason`) | crate root | Semver |
 | `rsagent-agent` types (`Agent`, `AgentError`, `Tool`, `ToolSource`, `ToolCatalog`, `SourceEntry`, `Approver`, `Permission`, `AgentEvent`, `PathFence`, `ToolResult`, `ToolContext`, `CircuitBreaker`, `Memory`, `MemoryEntry`, `RememberTool`, `RecallTool`) | crate root | Semver |
 | CLI flags and exit codes | `rsagent --help` | Semver |
-| `rsagent.toml` schema | [README](../README.md#tool-sources-rsagenttoml) | Semver |
-| `--json` event schema | [README](../README.md#json-output) | Semver (additive only) |
-| `--log` trace schema | [README](../README.md#event-log) | Semver (additive only) |
-| `local` / `skill` subprocess protocol (`protocol: 1`) | [EXTENSIBILITY §3](EXTENSIBILITY.md) | Versioned separately |
+| `rsagent.toml` schema | [README](README.md#tool-sources-rsagenttoml) | Semver |
+| `--json` event schema | [README](README.md#json-output) | Semver (additive only) |
+| `--log` trace schema | [README](README.md#event-log) | Semver (additive only) |
+| `local` / `skill` subprocess protocol (`protocol: 1`) | [EXTENSIBILITY §3](docs/EXTENSIBILITY.md) | Versioned separately |
 
 Both crates are `#[non_exhaustive]` where a future variant is likely (events, stop
 reasons, source health). Matching on them must include a wildcard arm; adding a variant
