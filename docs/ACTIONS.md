@@ -1660,6 +1660,7 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 | **§2.4 不变量 1**：分层是否单向 | 扫三个 `Cargo.toml` **全文**（含 `dev-`/`build-dependencies`）的 rsagent-* 依赖边（2026-11-20 16:19） | ✅ **成立且由编译器强制**：`rsagent-ai` 无 rsagent-* 依赖；`rsagent-agent` 只依赖 `rsagent-ai`；`rsagent` 依赖下面两层。**测试依赖里也没有向上边**。因为这是 Cargo 依赖边，不声明就无法 `use`——**不变量 1 不是君子协定，是编译错误**。 |
 | **§2.4 不变量 3**：工具失败用 `Err(String)` | 读 `Tool::execute` 的签名（2026-11-20 16:19） | ✅ **由类型强制**：`execute` 返回 `Result<ToolResult, String>`，把失败塞进 `Ok` 的 `content` 需要刻意为之。**编译器层面成立。** |
 | **§2.4 不变量 7**：公开 API 有文档注释 | 确认 CI 的 `Docs` job 与 lint（2026-11-20 16:19） | ✅ **由门禁强制**：`missing_docs` lint + `RUSTDOCFLAGS="-D warnings"` 的 `Docs` job；`missing_errors_doc` 亦已开启（见 `Cargo.toml` 的 `[workspace.lints]`）。 |
+| **§2.4 不变量 2**：新增 enum 变体前确认 `non_exhaustive` | 枚举全部公开 enum 及其标记状态（2026-11-20 16:49） | ✅ **无违规**：14 个公开 enum 中 8 个已标（`AgentEvent`/`StreamEvent`/`ErrorReason`/`SourceKind`/`SourceHealth`/`CatalogError`/`AgentError`/`ContentBlock`/`Message`/`StopReason`）；未标的 6 个（`Permission`/`ThinkingLevel`/`Modality`/`BreakerState`/`PathFence`/`FauxBlock`）都是**闭合集**。`STABILITY.md` 的政策表述（「在**可能新增变体处**标」）与现状**一致**——全量标记会给用户强加 wildcard 分支的成本，换不到收益。 |
 | **D15**：默认 `exec` 是否真是「最严」 | 比对 `tool.rs` 默认值与 4 个类别的语义（2026-11-20 12:49） | ❌ **不成立** → 已立为 **E6**（类别非全序，`--allow exec` 会放行未分类工具）。**这是本轮唯一发现的决策日志漂移。** |
 
 **一处刻意不记的观察**：`rsagent.toml` 的 `only` 字段是真实存在的（`SourceConfig.only`），
@@ -1678,3 +1679,14 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 `subprocess.rs` 的测试夹具还有两处 `#[cfg(windows)]`/`#[cfg(not(windows))]`。
 **但 D6 的实质不变量（业务代码不携带平台 `#[cfg]`）是成立的**（已核实，见上表），
 读者也不会被误导成「`#[cfg(test)]` 被禁」。**属措辞松散，不值得开任务。**
+
+**§2.4 的强制力分布（值得记录的模式）**：把九条不变量按「由谁保证」分类后，出现一个
+清晰的分界——
+- **编译器强制**：不变量 1（分层，Cargo 依赖边）、3（`Err(String)`，类型签名）；
+- **门禁强制**：不变量 7（文档，`missing_docs` + `Docs` job）；
+- **只有测试能覆盖**：不变量 4/5/6（审批一致、命名、schema）——**而它们恰好是唯一出过
+  真实问题的**（A1 违反不变量 4 却无人发现）。
+- **不可机械检查**：不变量 2（流程规则）、8（语义）、9（rule of two）。
+
+**这个分布正是 E7 的论据**：机械检查已在做它们该做的事，**缺口精确地落在「只有测试能覆盖」
+的那一类**——所以应该**扩大 conformance 测试的范围**，而不是逐个人工评审。
