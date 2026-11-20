@@ -23,19 +23,35 @@ one version (`[workspace.package] version`). · 工作区遵循语义化版本�
 
 ## Public API · 公开 API
 
-A crate's public API is exactly what its crate root re-exports (`pub use`), plus its
-documented public items. Anything `pub(crate)`, and any module not reachable from the
-crate root, is **internal** and may change at any time. Public items carry doc comments,
-and CI builds the docs with warnings denied, so a missing doc or a broken intra-doc link
-fails the build. · 一个 crate 的公开 API 就是其根
-`pub use` 导出的内容加上有文档的公开项；`pub(crate)` 及从根不可达的模块均为**内部**实现，
-可随时变更。公开项均带文档注释，且 CI 以「警告即错误」构建文档，因此缺失文档或断链会让构建
-失败。
+A crate's public API is **exactly the set of names its crate root re-exports** (`pub use`)
+— no more, no less. The table below lists every one of them, grouped by role; a test
+(`crates/rsagent/tests/docs.rs`) keeps the table and the crate roots in lock-step, so the
+two cannot drift. A re-export that is deliberately *not* promised carries `#[doc(hidden)]`
+and is left out of the table; anything `pub(crate)` is internal and may change at any time.
+Public items carry doc comments, and CI builds the docs with warnings denied, so a missing
+doc or a broken intra-doc link fails the build. · 一个 crate 的公开 API **就是其根 `pub use`
+导出的那组名字**——不多不少。下表按用途分组逐一列出；有测试（`crates/rsagent/tests/docs.rs`）
+令表格与各 crate 根保持同步，二者不会漂移。刻意**不**作承诺的再导出会标 `#[doc(hidden)]`
+并从表中略去；`pub(crate)` 一律为**内部**实现，可随时变更。公开项均带文档注释，且 CI 以
+「警告即错误」构建文档，因此缺失文档或断链会让构建失败。
 
 | Surface | Where | Stability |
 | --- | --- | --- |
-| `rsagent-ai` types (`Message`, `ContentBlock`, `Context`, `ToolSpec`, `StreamEvent`, `Model`, `Models`, `Provider`, `StreamOptions`, `Usage`, `StopReason`, `ThinkingLevel`, `ErrorReason`) | crate root | Semver |
-| `rsagent-agent` types (`Agent`, `AgentError`, `Tool`, `ToolSource`, `ToolCatalog`, `SourceEntry`, `Approver`, `Permission`, `AgentEvent`, `PathFence`, `ToolResult`, `ToolContext`, `CircuitBreaker`, `Memory`, `MemoryEntry`, `RememberTool`, `RecallTool`) | crate root | Semver |
+| `rsagent-ai` · messages — `AssistantMessage`, `ContentBlock`, `Context`, `Message`, `SystemMessage`, `ToolResultMessage`, `UserMessage` | crate root | Semver |
+| `rsagent-ai` · streaming — `ErrorReason`, `StreamEvent` | crate root | Semver |
+| `rsagent-ai` · provider — `Auth`, `EventStream`, `Models`, `Provider`, `StreamOptions`, `AnthropicProvider`, `OpenAiProvider` | crate root | Semver |
+| `rsagent-ai` · models & types — `Model`, `Modality`, `StopReason`, `ThinkingLevel`, `Usage`, `now_millis` | crate root | Semver |
+| `rsagent-ai` · tool spec — `ToolSpec` | crate root | Semver |
+| `rsagent-ai` · test doubles — `FauxBlock`, `FauxProvider`, `FauxResponse` | crate root | Semver |
+| `rsagent-agent` · loop — `Agent`, `AgentError`, `AgentEvent`, `HealthProbe` | crate root | Semver |
+| `rsagent-agent` · approval — `AllowAll`, `Approver`, `DenyAll`, `Permission` | crate root | Semver |
+| `rsagent-agent` · tools — `CatalogError`, `PathFence`, `PREFIX_SEPARATOR`, `SourceEntry`, `SourceHealth`, `SourceKind`, `Tool`, `ToolCatalog`, `ToolContext`, `ToolResult`, `ToolSource`, `UnhealthySource` | crate root | Semver |
+| `rsagent-agent` · sources — `BUILTIN_SOURCE_ID`, `BuiltinSource`, `LocalSource`, `MCP_PROTOCOL_VERSION`, `McpHttpSource`, `McpStdioSource`, `PROTOCOL_VERSION`, `SkillSource`, `WebSource`, `WebSourceConfig` | crate root | Semver |
+| `rsagent-agent` · breaker — `BreakerPolicy`, `BreakerReport`, `BreakerState`, `CircuitBreaker` | crate root | Semver |
+| `rsagent-agent` · memory — `DEFAULT_MEMORY_CAP`, `DEFAULT_RECALL_LIMIT`, `MAX_NOTE_CHARS`, `Memory`, `MemoryEntry` | crate root | Semver |
+| `rsagent-agent` · cancellation — `CancelToken` | crate root | Semver |
+| `rsagent-agent` · built-in tools — `BashTool`, `EditFileTool`, `GlobTool`, `ListDirTool`, `ReadFileTool`, `SearchTool`, `WebFetchTool`, `WriteFileTool`, `builtin_tools`, `select_builtin_tools` | crate root | Semver |
+| `rsagent-agent` · memory tools — `RecallTool`, `RememberTool`, `memory_tools` | crate root | Semver |
 | CLI flags and exit codes | `rsagent --help` | Semver |
 | `rsagent.toml` schema | [README](README.md#tool-sources-rsagenttoml) | Semver |
 | `--json` event schema | [README](README.md#json-output) | Semver (additive only) |

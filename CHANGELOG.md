@@ -187,6 +187,14 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 - **Memory: a single note is capped** at `MAX_NOTE_CHARS` (2000). An oversized note — which
   the model can write — was folded verbatim into the system prompt and could crowd the
   context budget; it is now truncated with a visible marker, like an oversized tool result.
+- **The contract documentation now matches the code.** Three drifts are closed. The
+  public-API table in `STABILITY.md` listed only 30 of the crate root's 79 re-exports, so a
+  reader could conclude that `BreakerPolicy`, `WebSourceConfig`, `builtin_tools` and 46
+  others were fair game; the table now lists every one, and a test keeps it and the crate
+  roots in lock-step, so the two cannot drift again. That table's four links into the
+  `rsagent.toml` / `--json` / `--log` contract sections were broken. And README's exit-code
+  table said `0` meant "the model produced an answer", although an aborted run also exits
+  `0`.
 
 ### Performance
 - The agent indexes its tools by name, so a tool call resolves its tool in O(1) instead
