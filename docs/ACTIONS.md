@@ -1535,9 +1535,16 @@ E5 可以在任何一次顺手的提交里带上。
 | 「六种 `kind`」的声称是否与实际一致 | 比对 `SourceKind::ALL` | ✅ 一致（Builtin/Local/McpStdio/McpHttp/Skill/Web） |
 | README 的 `rsagent.toml` 示例字段是否都真实存在 | 比对 `config.rs::SourceConfig`（16 字段） | ✅ 示例里出现的键**全部**存在于结构体；`Config`/`Tools` 都是 `deny_unknown_fields`，**照文档写不会解析失败** |
 | README 的 `skill.toml` 示例字段是否都真实存在 | 比对 `skill.rs::ToolConfig`（6 字段） | ✅ 完全一致：`name`/`description`/`command`/`args`/`parameters`/`requires_approval` |
-| 全仓库 markdown 相对链接完整性 | 扫 17 个 `.md` 的全部相对链接 | ⚠️ **仅 `STABILITY.md` 有 4 处断链**（见 D8），其余全部有效 |
+| 全仓库 markdown 相对链接完整性 | 扫 17 个 `.md` 的全部相对链接 | ✅ **D8 修好后 0 处断链**（`tests/docs.rs` 已把它变成 CI 检查） |
+| README 说两个 HTML 图解页含「**真实的函数名与事件名**」 | 从两个 `.html` 提取标识符，逐个比对源码（2026-11-20 11:49） | ✅ **全部命中**：15 个函数名（`run_turns`/`run_loop`/`run_one`/`stream_turn`/`run_tool_calls`/`execute_one`/`check_approval`/`probe_health`/`compact_context`/`build_context`/`inject_steering`/`resolve_within`/`truncate_result` 等）与**全部 14 个 `AgentEvent` 变体**都仍存在于源码；`ToolUse` 亦为真实的 `StopReason::ToolUse` |
 
 **一处刻意不记的观察**：`rsagent.toml` 的 `only` 字段是真实存在的（`SourceConfig.only`），
 但 README 只在正文提到「`--tools` replaces a built-in source's `only`」，**未放进示例**。
 评审方判断这**过于次要，不记为任务**——正文已确立该字段存在，读者可推知写法；
 为一个「示例可以更全」的观察单开一条会让清单失真。**此处记录以备查，不建议动手。**
+
+**一处值得注意的空白**：`docs/*.html` 两个图解页**不受任何门禁保护**——`tests/docs.rs`
+只检查 `.md` 的链接，`cargo doc` 只检查 Rust intra-doc 链接。**HTML 里的符号若随重命名
+过期，没有任何东西会报警**。评审方 2026-11-20 实测两份 HTML 仍然准确（见上表），
+**但这是一个将来可能悄悄漂移的点**。若将来 HTML 需要维护，可考虑把「HTML 中引用的
+`crate::` 符号必须存在」也纳入 `tests/docs.rs`；**当前不建议为此新增工作**，仅记录。
