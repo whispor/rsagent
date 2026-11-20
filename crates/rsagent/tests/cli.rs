@@ -1487,3 +1487,208 @@ fn tools_list_shows_a_persisted_breaker() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// --- Approval (ACTIONS.md D1) ----------------------------------------------------------
+//
+// Approval is the only defence in the "bash is not sandboxed" model, so its wiring gets
+// end-to-end coverage here. `--faux-tool` scripts the model's tool calls offline.
+
+#[test]
+fn print_without_yes_denies_a_write() {
+    // One-shot `--print` never prompts: a mutating tool is denied unless `--yes` is given,
+    // so an unattended run is never surprised.
+    let dir = temp_dir("approve-deny");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--faux-tool",
+            "write_file:{\"path\":\"out.txt\",\"content\":\"hi\"}",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipped write_file: approval required"),
+        "a mutating tool must be denied without --yes: {stderr}"
+    );
+    assert!(
+        !dir.join("out.txt").exists(),
+        "the denied write must not touch the disk"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn print_with_yes_runs_a_write() {
+    let dir = temp_dir("approve-yes");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--yes",
+            "--faux-tool",
+            "write_file:{\"path\":\"out.txt\",\"content\":\"hi\"}",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    assert!(
+        dir.join("out.txt").exists(),
+        "--yes must run the write instead of denying it"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn allow_write_permits_write_but_not_bash() {
+    // `--allow write` trusts exactly one category: the write runs, the exec does not.
+    let dir = temp_dir("approve-write-only");
+    let output = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--allow",
+            "write",
+            "--faux-tool",
+            "bash:{\"command\":\"echo hi\"}",
+            "--faux-tool",
+            "write_file:{\"path\":\"out.txt\",\"content\":\"hi\"}",
+        ])
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipped bash: approval required"),
+        "bash (exec) must still be denied: {stderr}"
+    );
+    assert!(
+        dir.join("out.txt").exists(),
+        "write_file must be permitted by --allow write"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn allow_network_permits_a_web_tool() {
+    // Locks A1: a `web` source tool is a `network` call, so `--allow network` must permit
+    // it. If `permission()` ever reverts to `exec`, `--allow network` stops covering it and
+    // the call is denied for approval — this test turns red.
+    let dir = temp_dir("approve-network");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"web\"\nid = \"weather\"\nurl = \"http://127.0.0.1:1/weather\"\nname = \"get_weather\"\nprefix = \"wx\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let allowed = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--allow",
+            "network",
+            "--faux-tool",
+            "wx__get_weather:{}",
+        ])
+        .output()
+        .expect("run rsagent");
+    assert!(
+        allowed.status.success(),
+        "exit status: {:?}",
+        allowed.status
+    );
+    let stderr = String::from_utf8_lossy(&allowed.stderr);
+    assert!(
+        !stderr.contains("approval required"),
+        "`--allow network` must permit a web tool: {stderr}"
+    );
+
+    // Without the category the same call is denied, proving the assertion above is
+    // sensitive to the category rather than passing for another reason.
+    let denied = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--print",
+            "go",
+            "--faux-tool",
+            "wx__get_weather:{}",
+        ])
+        .output()
+        .expect("run rsagent");
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert!(
+        stderr.contains("skipped wx__get_weather: approval required"),
+        "without --allow the web tool must be denied: {stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn interactive_a_remembers_the_decision() {
+    // Answering `a` approves the call and stops asking for the rest of the session: the
+    // second same-category call must not prompt again.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = temp_dir("approve-remember");
+    let log = dir.join("events.jsonl");
+    let mut child = rsagent()
+        .current_dir(&dir)
+        .arg("--faux")
+        .arg("--log")
+        .arg(&log)
+        .args([
+            "--faux-tool",
+            "write_file:{\"path\":\"a.txt\",\"content\":\"1\"}",
+            "--faux-tool",
+            "write_file:{\"path\":\"b.txt\",\"content\":\"2\"}",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rsagent");
+
+    // The prompt, then `a` (approve and remember), then quit.
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(b"go\na\nexit\n")
+        .expect("write to stdin");
+
+    let output = child.wait_with_output().expect("wait for rsagent");
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    assert!(
+        dir.join("a.txt").exists() && dir.join("b.txt").exists(),
+        "both approved writes must run"
+    );
+
+    // The event log is the reliable observable: exactly one approval was prompted.
+    let events = std::fs::read_to_string(&log).expect("read the event log");
+    let prompts = events
+        .lines()
+        .filter(|line| line.contains("\"type\":\"toolApprovalRequest\""))
+        .count();
+    assert_eq!(prompts, 1, "`a` must be remembered; event log:\n{events}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

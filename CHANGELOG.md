@@ -18,6 +18,9 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 ### Added
 - **`CHANGELOG.md`** — this file, so breaking changes have a documented home (the
   versioning rules in `STABILITY.md` already referred to a changelog).
+- **`--faux-tool <SPEC>`** — script a `--faux` tool call offline (`SPEC` is `name` or
+  `name:JSON_ARGS`; repeat for a sequence), so the approval path can be exercised with no
+  network or API key.
 - **`--log <FILE>`** — append the agent event stream to a file as JSON Lines, for
   post-mortem diagnosis of long or unattended runs. Reuses the same `Serialize`
   implementation as `--json`, so the on-disk trace and the stdout stream share one shape.

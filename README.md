@@ -67,6 +67,14 @@ cargo run -p rsagent -- --faux --print "hello"
 # (faux) you said: hello
 ```
 
+`--faux-tool` scripts a tool call, so the approval path also runs offline. `SPEC` is a tool
+name, or `name:JSON_ARGS`; repeat the flag for a sequence of calls:
+
+```bash
+cargo run -p rsagent -- --faux --print go --allow write \
+  --faux-tool 'write_file:{"path":"out.txt","content":"hi"}'
+```
+
 ### Talk to a real model
 
 Any OpenAI Chat Completions-compatible endpoint works (OpenAI, DeepSeek, Groq,
@@ -385,6 +393,7 @@ source out of the tool list (see decision D9).
 | `--base-url <URL>` | `RSAGENT_BASE_URL` | Base URL of an OpenAI-compatible endpoint. |
 | `--api-key <KEY>` | `RSAGENT_API_KEY` | API key; overrides the provider's env lookup. |
 | `--faux` | | Use the offline scripted provider. |
+| `--faux-tool <SPEC>` | | Script a `--faux` tool call (repeatable); `SPEC` is `name` or `name:JSON`. |
 | `--anthropic` | | Talk to an Anthropic Messages API endpoint instead of an OpenAI-compatible one. |
 | `--cwd <DIR>` | | Working directory the agent operates in (default `.`). |
 | `--system <PROMPT>` | | Override the system prompt (suppresses `AGENTS.md`). |

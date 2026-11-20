@@ -98,6 +98,13 @@ struct Cli {
     #[arg(long)]
     faux: bool,
 
+    /// Script a `--faux` tool call (repeatable); `SPEC` is `name` or `name:JSON_ARGS`.
+    ///
+    /// Each becomes one scripted tool-call turn, followed by a final text reply — enough to
+    /// exercise the approval path offline.
+    #[arg(long, value_name = "SPEC", requires = "faux")]
+    faux_tool: Vec<String>,
+
     /// Talk to an Anthropic Messages API endpoint instead of an OpenAI-compatible one.
     #[arg(long)]
     anthropic: bool,
@@ -312,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
 
     if let Some(prompt) = cli.print.clone() {
         if let Some(faux) = &faux_handle {
-            faux.set_responses(vec![faux_reply(&prompt, cli.thinking)]);
+            faux.set_responses(faux_responses(&cli, &prompt));
         }
         let result = run_prompt(&mut agent, &mut rx, &mut renderer, &mut log, prompt).await;
         // Persist before acting on the result, so a failed run is still recorded.
@@ -340,6 +347,14 @@ async fn main() -> anyhow::Result<()> {
         cli.cwd.display()
     );
     println!("Type a prompt, or /help for commands ('exit' to quit).\n");
+
+    // A `--faux-tool` script is queued once here; the REPL leaves a pending queue alone,
+    // so the calls replay on the first prompt and later prompts fall back to a text reply.
+    if let Some(faux) = &faux_handle {
+        if !cli.faux_tool.is_empty() {
+            faux.set_responses(faux_responses(&cli, "(scripted)"));
+        }
+    }
 
     let result = run_repl(
         &mut agent,
@@ -378,6 +393,39 @@ fn faux_reply(prompt: &str, thinking: ThinkingLevel) -> FauxResponse {
     FauxResponse {
         blocks,
         stop_reason: StopReason::Stop,
+    }
+}
+
+/// The scripted `--faux` responses for one prompt.
+///
+/// Each `--faux-tool` becomes a tool-call turn, then a final text reply closes the run.
+/// With no `--faux-tool` this is just the plain text reply, as before.
+fn faux_responses(cli: &Cli, prompt: &str) -> Vec<FauxResponse> {
+    let mut responses: Vec<FauxResponse> = cli
+        .faux_tool
+        .iter()
+        .map(|spec| {
+            let (name, arguments) = faux_tool_call(spec);
+            FauxResponse::tool_calls(vec![(name, arguments)])
+        })
+        .collect();
+    responses.push(faux_reply(prompt, cli.thinking));
+    responses
+}
+
+/// Parse one `--faux-tool` spec (`name` or `name:JSON`) into a tool name and arguments.
+///
+/// A malformed JSON argument is a usage error (`exit 2`), matching `--allow`/`--tools`.
+fn faux_tool_call(spec: &str) -> (String, Value) {
+    let Some((name, json)) = spec.split_once(':') else {
+        return (spec.to_string(), Value::Object(serde_json::Map::new()));
+    };
+    match serde_json::from_str(json) {
+        Ok(arguments) => (name.to_string(), arguments),
+        Err(error) => {
+            eprintln!("error: bad JSON in --faux-tool `{spec}`: {error}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -1044,9 +1092,13 @@ async fn run_repl(
         }
 
         if let Some(faux) = faux {
-            faux.set_responses(vec![FauxResponse::text(format!(
-                "(faux) you said: {input_text}"
-            ))]);
+            // Leave a scripted `--faux-tool` queue in place for the first prompt; once it
+            // drains, fall back to the plain text reply.
+            if faux.pending_count() == 0 {
+                faux.set_responses(vec![FauxResponse::text(format!(
+                    "(faux) you said: {input_text}"
+                ))]);
+            }
         }
 
         // A model failure is already shown to the user (the renderer reports it as an
