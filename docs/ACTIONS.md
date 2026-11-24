@@ -1685,7 +1685,7 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 
 ### E5 · 🆕 `ARCHITECTURE.md` 里的测试数已过期（230 → 267）
 
-- **状态**：待办 · **成本**：约 5 分钟 · **影响**：低（文档准确性）
+- **状态**：已完成 (efe3758) · **成本**：约 5 分钟 · **影响**：低（文档准确性）
 - **问题（2026-11-20 07:49 评审方实测）**：`docs/ARCHITECTURE.md:307` 与 `:310`
   两处都写着
 
@@ -1704,6 +1704,21 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
   会随提交失效的常量。
 - **顺带核实（已通过）**：同一轮检查了其它计数声称，`EXTENSIBILITY.md` 的「六种 `kind`」
   与 `SourceKind::ALL`（Builtin/Local/McpStdio/McpHttp/Skill/Web）**一致，无需改动**。
+
+```
+- 状态：已完成 (efe3758)
+- 采用方案：**直接去掉数字**（评审方首选）——不写「230」也不写「200+」，改为不会漂移的表述。
+  `docs/ARCHITECTURE.md:307-311`（英/中两处）从
+  「runs 230 tests … / 有 230 个测试」改为
+  「runs a suite that reads like usage examples … / 跑一整套读起来像用例的测试」。
+- 验收证据：
+  - `grep -n "230" docs/ARCHITECTURE.md` → **无结果**（exit 1），旧常量已清除。
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 287 通过 / 0 失败
+  - cargo doc ...                    → 0 告警
+- 说明：纯文档改动，无代码路径受影响；门禁全绿以保持一致。
+```
 
 ---
 
