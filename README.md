@@ -192,7 +192,7 @@ headers = { Authorization = "Bearer sk-..." }      # sent on every request
 [[tools.sources]]
 kind = "skill"            # a folder of scripts declared by a manifest
 id = "team"
-path = "./skills/team"    # holds SKILL.md and skill.toml
+path = "./skills/team"    # holds SKILL.md and skill.toml; relative to this config file
 prefix = "team"           # tools appear to the model as team__<name>
 
 [[tools.sources]]
@@ -325,7 +325,9 @@ breaker as the other MCP sources; a well-formed JSON-RPC `error` does not.
 #### The `skill` source
 
 A `skill` source is a **folder** of scripts, declared by a manifest — the smallest unit
-for packaging a team's tools alongside its notes. Point `path` at a directory that holds
+for packaging a team's tools alongside its notes. A relative `path` is resolved against
+the **config file's** directory, not the process working directory, so one `rsagent.toml`
+works from any subdirectory of the repo. Point `path` at a directory that holds
 
 - `SKILL.md` — the skill's documentation, and the marker that the folder *is* a skill;
 - `skill.toml` — one `[[tool]]` entry per tool:

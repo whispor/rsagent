@@ -92,6 +92,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   Per [STABILITY.md](STABILITY.md) a MSRV rise is a **minor** change.
 
 ### Fixed
+- **A skill source's relative `path` is resolved against its config file, not the process
+  working directory.** Running from a subdirectory (`repo/sub`) made `path = "./skills/team"`
+  point at the wrong folder, and the source was then silently skipped. A relative `path` is
+  now joined to the directory of the `rsagent.toml` that declared it, so the same config works
+  from anywhere in the repo. `command` is deliberately left alone — it may name a program found
+  on `PATH`.
 - **An OpenAI stream's mid-stream error, and a truncated tool call, now fail the turn.** An
   `{"error": ...}` object in the stream was ignored, so the turn ended as an empty success and
   the failure was invisible; it now ends with a terminal error, and nothing after it is read.

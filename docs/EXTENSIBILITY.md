@@ -204,7 +204,9 @@ at assembly time by `ToolCatalog`; the loop never learns where tools come from.
 `%APPDATA%\rsagent\` 或 `~/.config/rsagent/`；可用 `RSAGENT_USER_CONFIG` 覆盖）作为底层，
 **项目级**（自工作目录向上查找）作为上层，同 id 的项目条目覆盖用户条目。CLI 参数再覆盖
 两者。**已实现**（`crates/rsagent/src/config.rs`）；当前解析 `builtin` / `local` /
-`mcp-stdio` / `mcp-http` / `skill` / `web` 六种 `kind`。
+`mcp-stdio` / `mcp-http` / `skill` / `web` 六种 `kind`。`skill` 的 `path` 若为**相对路径**，
+以**声明它的配置文件所在目录**为基准解析（而非进程工作目录），所以同一份配置在仓库任意
+子目录下都能用；`command` **不**重写（它可能是 `PATH` 上的程序）。
 
 ```toml
 # rsagent.toml

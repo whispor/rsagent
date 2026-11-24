@@ -184,7 +184,8 @@ fn load_from(user: Option<&Path>, project: Option<&Path>) -> LayeredConfig {
         }
         match std::fs::read_to_string(path) {
             Ok(text) => match Config::parse(&text) {
-                Ok(config) => {
+                Ok(mut config) => {
+                    resolve_source_paths(&mut config.tools.sources, path);
                     sources = merge_sources(sources, config.tools.sources);
                     layered.paths.push(path.to_path_buf());
                 }
@@ -200,6 +201,27 @@ fn load_from(user: Option<&Path>, project: Option<&Path>) -> LayeredConfig {
 
     layered.config.tools.sources = sources;
     layered
+}
+
+/// Resolve each source's relative `path` against the directory of the file that declared it.
+///
+/// A relative `path` (`./skills/team`) means "next to this config file", not "under the
+/// process working directory", so the same `rsagent.toml` works from any subdirectory of
+/// the repo. A rooted path (a leading `/`, a drive letter) is left as-is — note that on
+/// Windows `/opt/team` is rooted but *not* "absolute", so the test is [`Path::has_root`],
+/// not [`Path::is_absolute`]. Only `path` is resolved: `command` may name a program found on
+/// `PATH`, so it must not be rewritten.
+fn resolve_source_paths(sources: &mut [SourceConfig], file: &Path) {
+    let Some(dir) = file.parent() else {
+        return;
+    };
+    for spec in sources {
+        if let Some(relative) = spec.path.as_deref().map(Path::new) {
+            if !relative.has_root() {
+                spec.path = Some(dir.join(relative).to_string_lossy().into_owned());
+            }
+        }
+    }
 }
 
 /// Merge `over` into `base` by source id: an entry whose id already exists replaces it
@@ -440,5 +462,56 @@ mod tests {
         assert_eq!(layered.paths, Vec::<std::path::PathBuf>::new());
         assert_eq!(layered.warnings, Vec::<String>::new());
         assert!(layered.config.tools.sources.is_empty());
+    }
+
+    #[test]
+    fn a_relative_skill_path_is_resolved_against_its_config_file() {
+        let dir = std::env::temp_dir().join(format!("rsagent-cfg-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let project = dir.join("rsagent.toml");
+        std::fs::write(
+            &project,
+            "[[tools.sources]]\nkind = \"skill\"\nid = \"team\"\npath = \"./skills/team\"\n",
+        )
+        .expect("write project");
+
+        let layered = super::load_from(None, Some(&project));
+        let resolved = layered.config.tools.sources[0]
+            .path
+            .as_deref()
+            .expect("a path");
+
+        // The base is the *config file's* directory, not the process working directory.
+        assert_eq!(
+            std::path::Path::new(resolved),
+            dir.join("skills").join("team"),
+            "got {resolved}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_absolute_path_and_a_command_are_left_untouched() {
+        let dir = std::env::temp_dir().join(format!("rsagent-cfg-abs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let project = dir.join("rsagent.toml");
+        std::fs::write(
+            &project,
+            "[[tools.sources]]\nkind = \"skill\"\nid = \"team\"\npath = \"/opt/team\"\n\
+             [[tools.sources]]\nkind = \"local\"\nid = \"rel\"\ncommand = \"./scripts/tool\"\n",
+        )
+        .expect("write project");
+
+        let layered = super::load_from(None, Some(&project));
+        let sources = &layered.config.tools.sources;
+        assert_eq!(sources[0].path.as_deref(), Some("/opt/team"));
+        assert_eq!(
+            sources[1].command.as_deref(),
+            Some("./scripts/tool"),
+            "a `command` may be found on PATH, so it must not be rewritten"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
