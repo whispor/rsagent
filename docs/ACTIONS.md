@@ -1979,6 +1979,12 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 | **§2.4 不变量 3**：工具失败用 `Err(String)` | 读 `Tool::execute` 的签名（2026-11-20 16:19） | ✅ **由类型强制**：`execute` 返回 `Result<ToolResult, String>`，把失败塞进 `Ok` 的 `content` 需要刻意为之。**编译器层面成立。** |
 | **§2.4 不变量 7**：公开 API 有文档注释 | 确认 CI 的 `Docs` job 与 lint（2026-11-20 16:19） | ✅ **由门禁强制**：`missing_docs` lint + `RUSTDOCFLAGS="-D warnings"` 的 `Docs` job；`missing_errors_doc` 亦已开启（见 `Cargo.toml` 的 `[workspace.lints]`）。 |
 | **§2.4 不变量 2**：新增 enum 变体前确认 `non_exhaustive` | 枚举全部公开 enum 及其标记状态（2026-11-20 16:49） | ✅ **无违规**：14 个公开 enum 中 8 个已标（`AgentEvent`/`StreamEvent`/`ErrorReason`/`SourceKind`/`SourceHealth`/`CatalogError`/`AgentError`/`ContentBlock`/`Message`/`StopReason`）；未标的 6 个（`Permission`/`ThinkingLevel`/`Modality`/`BreakerState`/`PathFence`/`FauxBlock`）都是**闭合集**。`STABILITY.md` 的政策表述（「在**可能新增变体处**标」）与现状**一致**——全量标记会给用户强加 wildcard 分支的成本，换不到收益。 |
+| **§2.4 不变量 8**：「两条通道」是否都给出原因 | 回读 `agent.rs` 的 `StopReason::Error` 分支与 `StreamEvent` 转发（2026-11-25 02:00） | ✅ **成立**：① `Agent::error_message()` —— `last_error` 在 `agent.rs:432` 被写入；② **错误事件** —— 每个 `StreamEvent` 都经 `agent.rs:500` 转发为 `AgentEvent::MessageUpdate`，**包括 `StreamEvent::Error`**，另有 `TurnEnd`（其 message 的 `stop_reason == Error`）。调用方写 `prompt(..).await?` 与只渲染事件的 UI **都能看到失败原因**。 |
+
+> **§2.4 核实的覆盖情况（2026-11-25 汇总）**：九条不变量中，
+> **1 / 2 / 3 / 7 / 8 已逐条实测**（见上表各行）；**5 / 6 由 `tool_conformance.rs` 覆盖，
+> 但仅限内置工具**（E7 已把该范围写准）；**4 的 violation 实例即 A1，已修**；
+> **9（rule of two）不可机械检查**，属人工判断。**没有未核实的条目。**
 | **D15**：默认 `exec` 是否真是「最严」 | 比对 `tool.rs` 默认值与 4 个类别的语义（2026-11-20 12:49） | ❌ **不成立** → 已立为 **E6**（类别非全序，`--allow exec` 会放行未分类工具）。**这是本轮唯一发现的决策日志漂移。** |
 
 **一处刻意不记的观察**：`rsagent.toml` 的 `only` 字段是真实存在的（`SourceConfig.only`），
