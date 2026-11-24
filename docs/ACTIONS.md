@@ -1601,7 +1601,7 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 
 ### E4 · M4 · `Usage.input` 两家 provider 语义相反
 
-- **状态**：待办
+- **状态**：已完成 (d1b22a5)
 - **成本**：约 0.5 天 · **影响**：中（成本/用量统计偏低）
 - **问题（已验证）**：`Usage`（`crates/rsagent-ai/src/types.rs:71-74`）把 `input` 文档写作
   「Input (prompt) tokens billed for this call」，另有独立的 `cache_read` / `cache_write`。
@@ -1652,6 +1652,34 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 >
 > **优先级相应下调**：E4 仍值得修（用量/成本是用户可见的数字），但**排在 E1（安全）、
 > E3（丢会话）之后**，且比 E5（文档数字）更值得做。
+
+```
+- 状态：已完成 (d1b22a5)
+- 选定语义：**方案 (a)「互斥」**——`Usage::input` 不含缓存命中，总量 = `input + cache_read
+  + cache_write`（与 Anthropic 原生形状一致，也是评审方引用的业界做法）。
+- 实现：`crates/rsagent-ai/src/providers/openai.rs` 的 usage 解析改为先取 `cached =
+  prompt_tokens_details.cached_tokens`、`prompt = prompt_tokens`，再填
+  `input = prompt.saturating_sub(cached)`（**饱和减**，防上游给出 cached > prompt 的畸形值时下溢）。
+  `cache_read = cached`、`cache_write = 0`。Anthropic 侧本就互斥，**未改代码**。
+- 文档：`crates/rsagent-ai/src/types.rs` 的 `Usage::input` 文档写清「cache-exclusive」，
+  给出 `input + cache_read + cache_write` 的完整提示长度口径，并注明 OpenAI 侧已做减法归一。
+  CHANGELOG 记一条 **Breaking**（`Usage` 在 STABILITY 的 Semver 表内）。
+- 新增测试（+2）：两家各喂一份带缓存字段的 usage JSON，断言归一后**总量一致**——
+  - `providers::openai::tests::usage_normalizes_prompt_tokens_to_a_cache_exclusive_input`
+    —— `prompt_tokens: 100` + `cached_tokens: 40` → `input == 60`、`cache_read == 40`、
+    `input + cache_read == 100`。
+  - `providers::anthropic::tests::usage_keeps_cache_reads_separate_from_the_billed_input`
+    —— `input_tokens: 60` + `cache_read_input_tokens: 40` → 同为 `input + cache_read == 100`。
+- A/B 验证：把 `input` 临时改回旧的 `prompt`（含缓存）→ 该测试 **FAILED**（`left: 100,
+  right: 60`）；恢复后通过。证明这是真回归测试。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 287 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+- 影响面（沿用评审方核实）：仅成本/用量统计，不影响上下文管理——压缩器用 `message_chars()`
+  字符估算，不读 `Usage`。
+```
 
 ---
 
