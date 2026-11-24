@@ -77,7 +77,7 @@
 **已选定**：**(c) 只读命令不启动进程。** `--list-tools` / `rsagent tools list` /
 `rsagent tools doctor` **不执行** `install()`，只读配置、**不 spawn** 任何进程。
 
-**执行方要点**：
+**执行方要点**（**2026-11-24 评审方回读代码后细化，见下方「已核实的实现约束」**）：
 - 这三个命令改为**纯读配置**：列出将装配的来源与工具（工具名可从配置推导；`local`/`mcp-stdio`
   的工具名需要 `--describe`/`tools/list`，**因此这两个命令对这类来源只报「未启动，工具名未知」**，
   并在输出里**明说原因**——不要静默留空）。
@@ -86,8 +86,34 @@
 - **`--trust-project`（选项 b）不在本次范围内**，留到有真实需求时再议。
 - 文档同步：README 的「信任边界」与「Managing tool sources」两节要写明这一行为差异。
 
+**已核实的实现约束（评审方 2026-11-24 回读代码）——这两条能省掉返工**：
+
+1. **只需处理 6 种 kind 里的 3 种。** `build_source`（`crates/rsagent/src/main.rs:849`）
+   里「构造即启动」只发生在三种来源：
+
+   | kind | 构造时是否触达外部 | 只读模式下 |
+   | --- | --- | --- |
+   | `builtin` | 否 | **照常装配** |
+   | `skill` | 否——`SkillSource::new` 只读 `SKILL.md` + `skill.toml` | **照常装配** |
+   | `web` | 否——`WebSource::new` 只建 `reqwest::Client`，不发请求 | **照常装配** |
+   | `local` | **是**——`LocalSource::new` 跑 `command --describe` | **只报声明** |
+   | `mcp-stdio` | **是**——`McpStdioSource::new` spawn 服务端 | **只报声明** |
+   | `mcp-http` | **是**——`McpHttpSource::new` 发 `initialize` 请求 | **只报声明** |
+
+   即**只有 `local`/`mcp-stdio`/`mcp-http` 需要「声明态」**，另三种可原样装配——这把改动
+   面从「所有来源」缩到「三种」，也解释了为什么 `skill` 的文档强调「自描述、无需运行」。
+
+2. **不要用 `spawn: bool` 参数——项目 lint 禁止布尔参数。** `Cargo.toml` 的
+   `[workspace.lints]` 开了 `fn_params_excessive_bools`，且 `AGENTS.md` 明确写
+   「Boolean parameters are not allowed (`max-fn-params-bools = 0`); take an enum instead」。
+   给 `build_catalog`/`build_source` 加模式时应取一个**二值 enum**（如
+   `SourceMode::{Assemble, DeclaredOnly}`），否则 CI 的 `clippy -D warnings` 会红。
+   *（这与 D15 用 `Permission` 而非布尔的做法一致——本项目的一贯风格。）*
+
 **验收**：在含 `local` 来源的仓库里跑 `--list-tools` / `tools list` / `tools doctor`，
 **断言声明的程序没有被执行**（例如让 `command` 指向一个会写文件的脚本，断言该文件**未**出现）。
+**再加一条**：断言 `builtin`/`skill`/`web` 三种来源在只读模式下**仍照常列出其工具**——
+避免实现时「一刀切全部跳过」，那会白白丢掉本来拿得到的信息。
 
 ### 决策二 · C2 → **选定 (b)：每 5 轮最多一条蒸馏笔记**
 
