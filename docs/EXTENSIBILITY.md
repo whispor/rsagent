@@ -112,8 +112,13 @@ These hold for every change, forever. · 以下每条对所有改动永久有效
 3. **工具失败 MUST 用 `Err(String)`，MUST NOT 把失败塞进成功结果的 `content`。**
    循环据此把结果标成 `is_error: true` 交回模型。
 4. **`Tool::requires_approval()` MUST 与实际副作用一致。** 会写盘、跑命令、发网络请求的工具必须返回 `true`。
-   需要审批的工具 SHOULD 同时用 `Tool::permission()` 声明真实类别（`read`/`write`/`exec`/`network`），
-   否则默认按最严的 `exec` 处理——**MUST NOT 声明成比实际副作用更宽松的类别**（那会让 `--allow` 静默放行危险操作）。
+   需要审批的工具 MUST 用 `Tool::permission()` **显式声明真实类别**（`read`/`write`/`exec`/`network`）。
+   四个类别**彼此正交，不存在全序**——`exec` 并不比 `network` 更严——所以**没有**一个
+   「天然更安全的默认类别」可以兜底：未显式分类的工具会落到默认 `exec`，因而不被
+   `--allow write`/`--allow network` 放行，**却会被 `--allow exec` 放行**；若它实际是网络工具，
+   那就是静默的权限放大（A1 修的正是这个：`web`/`mcp-http`/`mcp-stdio` 三个来源当时都没声明，
+   全部落到了 `exec`）。默认 `exec` 只是**兜底提醒**，不是安全保证——**MUST NOT 声明成比实际副作用更宽松的类别**
+   （那会让 `--allow` 静默放行危险操作），新增需要审批的工具时 **MUST 显式分类**。
 5. **工具名 MUST 全局唯一且为 `snake_case`。** 模型靠名字调用，重名即歧义。
 6. **工具的参数 schema MUST 是 JSON object schema**，且 `required` 里的键 MUST 在 `properties` 中声明。
 7. **公开 API MUST 有文档注释**；返回 `Result` 的 MUST 有 `# Errors` 段（`missing_errors_doc` 已开）。
@@ -127,8 +132,15 @@ These hold for every change, forever. · 以下每条对所有改动永久有效
 
 ### 2.5 一致性测试 · The conformance test
 
-`crates/rsagent-agent/tests/tool_conformance.rs` 把 §2.4 里可机检的部分固化成测试。
-任何新增内置工具都会自动被它检查。**这是"规范"与"建议"的分界线。**
+`crates/rsagent-agent/tests/tool_conformance.rs` 把 §2.4 里可机检的部分固化成测试，
+覆盖 **`builtin_tools()` 里的内置工具**。任何新增内置工具都会自动被它检查。
+**这是"规范"与"建议"的分界线。**
+
+**来源工具另计。** `web`/`mcp-http`/`mcp-stdio`/`local`/`skill` 的工具同样实现 `Tool`、
+同样受 §2.4 约束，但它们是**运行期装配**的（构造即读文件 / spawn / 发请求），工具名与
+schema 也由来源决定，故不在这份内置工具测试的视野内。它们各自的一致性断言——主要是
+§2.4 规则 4 的 `Tool::permission()` 类别——放在**各来源自己的模块测试**里
+（`crates/rsagent-agent/src/sources/*.rs` 的 `#[cfg(test)]`）。新增一类来源时，应补上对应断言。
 
 Adding a new kind of extension SHOULD come with a matching conformance test in the same
 PR. · 新增一类扩展时，应当在同一个 PR 里补上对应的一致性测试。
@@ -502,7 +514,7 @@ Ordered by (value ÷ risk). 每项标注对北极星①（最小化）的影响�
 | D12 | 熔断器状态用**墙钟秒**的 `BreakerReport` 持久化，而非直接存 `Instant` | `Instant` 是单调时钟，跨进程无意义：新进程读到的 `Instant` 无法与"现在"比较，还原出的冷却剩余时间必然错误。改用 `opened_at_unix`（Unix 秒）+ `cooldown_secs`，`restore()` 在启动时用当前墙钟反推，于是"上个进程里冷却中的来源"能被正确地继续排除 |
 | D13 | 健康探针是**不透明闭包**（`HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource>>`），而非让 `Agent` 持有 `ToolSource` | 一旦循环持有来源，它就要理解"连接失败/超时/熔断"等来源专有状态，D2 的隔离随之瓦解。闭包把来源健康降维成纯数据（id/kind/reason），循环只负责"对比上一轮、发一次事件"。CLI 侧用 `Arc<[SourceEntry]>` 同时供探针轮询与运行后的快照，避免复制来源 |
 | D14 | 工具失败用 **`Err(String)`**，不引入结构化错误类型 | 工具失败最终是**给模型看的文本**，消息本身就是载荷；结构化枚举最后还是得字符串化给模型，却让每个工具作者都背一次声明与转换的成本。真正需要区分的类别（"来源不可达" vs "来源回了业务错误"）是**按代码路径结构化判定**的（`sources/local.rs` / `web.rs` 等直接喂熔断器），从不匹配消息文本——所以消息自由格式是有意的。需要更多信息的调用方，可读成功时的 `ToolResult::details` 或 `ToolExecutionEnd` 事件 |
-| D15 | 权限分级用**新增 `Tool::permission()` 类别**，而**保留 `requires_approval()` 布尔作为门禁**；`Approver` 的两个方法都接收 `Permission` | 门禁（"要不要审批"）与类别（"属于哪类副作用"）是两个正交问题：read 工具无需审批，但只要审批就必须知道是哪一类才能分级。把两者合成一个枚举会破坏"布尔门禁"的既有语义、波及配置字段与不变量 #4。类别由**循环在查表时顺带取得**并**传参**给 `Approver`（而非让 `CliApprover` 自建 name→类别 的旁表），保证"来源唯一"（呼应 M 的原则）。默认类别取最严的 `exec`：未分类的审批工具不会被 `--allow write`/`--allow network` 意外放行 |
+| D15 | 权限分级用**新增 `Tool::permission()` 类别**，而**保留 `requires_approval()` 布尔作为门禁**；`Approver` 的两个方法都接收 `Permission` | 门禁（"要不要审批"）与类别（"属于哪类副作用"）是两个正交问题：read 工具无需审批，但只要审批就必须知道是哪一类才能分级。把两者合成一个枚举会破坏"布尔门禁"的既有语义、波及配置字段与不变量 #4。类别由**循环在查表时顺带取得**并**传参**给 `Approver`（而非让 `CliApprover` 自建 name→类别 的旁表），保证"来源唯一"（呼应 M 的原则）。默认类别取 `exec`，但这是**兜底提醒，不是安全保证**：四个类别**正交、不存在全序**——`exec` 并不比 `network` 更严。未显式分类的工具不被 `--allow write`/`--allow network` 放行，**却会被 `--allow exec` 放行**；若它实际是网络工具，那就是静默的权限放大（A1 修的正是 `web`/`mcp-http`/`mcp-stdio` 三个来源当初都没声明、全部落到了默认 `exec`）。**所以安全靠的是每个来源显式声明类别，而不是指望默认值已经足够安全。** |
 | D16 | 记忆层用**追加式 JSONL 笔记文件**（`Memory`）+ 两个**可选**工具，并把最近笔记**折进 system prompt**；压缩时把被丢弃的回合蒸馏成一条 `[compacted]` 笔记 | 否决"向量库 / 外部数据库"：为一个能力引入重依赖，违背①；否决"默认开启 `remember`/`recall`"：读写文件是副作用，默认开启会让每个用户凭空多出两个工具与一个隐式文件，改为 `--memory <FILE>` 显式 opt-in（呼应 D2"来源在装配期决定工具集"）。折进 system prompt 而非要求模型主动 `recall`：省一次工具往返，且与"每请求重建上下文"的既有路径一致（①）。蒸馏复用同一存储，让上下文管理的丢弃不再是永久损失，而非新增机制（④⑤）。存储沿用会话文件已验证的"追加 + 截断尾行丢弃"约定，不新造崩溃恢复逻辑 |
 
 ---
@@ -534,4 +546,5 @@ Copy this into your PR description. · 复制到 PR 描述里。
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — 三层分层、一次运行的生命周期、两条通道、扩展点
 - [`../STABILITY.md`](../STABILITY.md) — 版本策略、公开 API 清单、MSRV、遥测声明
 - [`tool-call-journey.html`](tool-call-journey.html) — 一次工具调用的逐步可视化
-- `crates/rsagent-agent/tests/tool_conformance.rs` — 本规范 §2.4 的可执行部分
+- `crates/rsagent-agent/tests/tool_conformance.rs` — 本规范 §2.4 对**内置工具**的可执行部分
+  （来源工具的 §2.4 一致性由 `crates/rsagent-agent/src/sources/*.rs` 各自的测试断言）
