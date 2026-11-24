@@ -1521,7 +1521,7 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 
 ### E3 · M11 · REPL 遇 `MaxTurnsExceeded`/`NoResult` 会退出且丢会话
 
-- **状态**：待办
+- **状态**：已完成 (19e81d1)
 - **成本**：约 0.5 天 · **影响**：中（用户可见）
 - **问题（已验证）**：`crates/rsagent/src/main.rs:1057-1058`
 
@@ -1545,6 +1545,30 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 - **验收**：新增 E2E：`--faux` + `--max-turns 1` + 一个需要工具的 prompt，交互模式下断言
   进程**没有退出**且会话文件已写入。
 - **关联**：REVIEW.md M11、§6 的「退出码」契约（`--print` 下退 1 是对的，REPL 下不该退）。
+
+```
+- 状态：已完成 (19e81d1)
+- 实现：新增 `ends_the_session(&anyhow::Error) -> bool`（`crates/rsagent/src/main.rs`），
+  把 REPL 的容忍判定从「是否模型级失败」改成「是否应当结束会话」。三个 turn 级错误
+  （`NoResult` / `MaxTurnsExceeded` / `ModelFailed`）都**不**结束会话；其余（含未来新增的
+  `#[non_exhaustive]` 变体）按排除法默认致命——这是安全方向。REPL 里对**尚未**由事件报过的
+  两个（`NoResult`/`MaxTurnsExceeded`）打印「本轮未完成：…（会话已保留，可继续输入）」，
+  `ModelFailed` 仍由 renderer 报，不重复。`--print` 路径**未动**：所有失败运行仍退非零，
+  符合 §6 退出码契约。`is_model_failure` 保留（`--print` 仍在用）。
+- 新增测试：`the_repl_survives_a_turn_that_hits_the_limit`（`tests/cli.rs`）——`--faux`
+  + `--faux-tool read_file:{…}` + `--max-turns 1` + `--session`，stdin 依次喂 prompt 与
+  `exit`。断言：进程退 0、stdout 含「本轮未完成」、会话文件含该 prompt。
+- A/B 验证：把 `main.rs` 的修复 stash 掉后重跑该测试 → **FAILED，`ExitStatus(1)`**
+  （旧行为：REPL 在 `MaxTurnsExceeded` 上直接退出，会话未保存）；恢复后通过。证明这是真
+  回归测试，而非恒真。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 282 通过 / 0 失败（较上轮 +1）
+  - cargo doc ...                    → 0 告警
+- README：第 585 行「the interactive REPL never exits on a failed turn」修复后**变为真**，
+  无需改字。
+```
 
 ### E4 · M4 · `Usage.input` 两家 provider 语义相反
 
