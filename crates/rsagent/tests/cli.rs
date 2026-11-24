@@ -448,6 +448,66 @@ fn repl_handles_slash_commands() {
 }
 
 #[test]
+fn the_repl_survives_a_turn_that_hits_the_limit() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    // `--max-turns 1` with a prompt that calls a tool: answering needs a second turn, so
+    // the run ends with `MaxTurnsExceeded`. The REPL must survive that (README: "the REPL
+    // never exits on a failed turn") and still save the session. A fatal turn would return
+    // from the loop *before* the save, so both the exit code and the session file witness
+    // the difference — and the queued `exit` keeps the process from lingering if it lives.
+    let dir = temp_dir("repl-turn-limit");
+    std::fs::write(dir.join("notes.txt"), "hello").expect("write notes.txt");
+    let session = dir.join("session.json");
+
+    let mut child = rsagent()
+        .current_dir(&dir)
+        .args([
+            "--faux",
+            "--faux-tool",
+            r#"read_file:{"path":"notes.txt"}"#,
+            "--max-turns",
+            "1",
+            "--yes",
+            "--session",
+        ])
+        .arg(&session)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rsagent");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(b"read the file\nexit\n")
+        .expect("write to stdin");
+
+    let output = child.wait_with_output().expect("wait for rsagent");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "a turn that hits the limit must not end the REPL: {:?}\n{stdout}",
+        output.status
+    );
+    assert!(
+        stdout.contains("本轮未完成"),
+        "the turn-level failure should be named: {stdout}"
+    );
+    let saved = std::fs::read_to_string(&session).expect("the session must be saved");
+    assert!(
+        saved.contains("read the file"),
+        "the failed turn must still be saved: {saved}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn agents_md_reaches_the_system_prompt() {
     // A project's `AGENTS.md` should be folded into the system prompt. The saved session
     // carries that prompt, so it doubles as the observable for this test.

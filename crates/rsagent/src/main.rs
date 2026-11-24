@@ -379,6 +379,24 @@ fn is_model_failure(error: &anyhow::Error) -> bool {
     )
 }
 
+/// Whether an error must end the interactive REPL, rather than only the current turn.
+///
+/// Three failures are turn-level and leave the session intact: the model errored (already
+/// shown as an event), it produced no result, or the run hit the turn limit. Anything else
+/// is structural and ends the loop — and matching by exclusion also keeps a future
+/// `AgentError` variant fatal by default, which is the safe direction for a non-exhaustive
+/// enum.
+fn ends_the_session(error: &anyhow::Error) -> bool {
+    !matches!(
+        error.downcast_ref::<AgentError>(),
+        Some(
+            AgentError::NoResult
+                | AgentError::MaxTurnsExceeded { .. }
+                | AgentError::ModelFailed { .. }
+        )
+    )
+}
+
 /// The scripted `--faux` reply for a one-shot `--print` run.
 ///
 /// When a thinking level is requested the reply carries a reasoning block too, so the
@@ -1101,13 +1119,24 @@ async fn run_repl(
             }
         }
 
-        // A model failure is already shown to the user (the renderer reports it as an
-        // event), so keep the REPL alive rather than tearing the session down over one
-        // bad turn. Any other error is fatal.
+        // The REPL carries one session across turns, so a turn that merely failed must not
+        // tear it down — that would discard the whole conversation (README: "the REPL never
+        // exits on a failed turn"). Only a structural failure ends the loop.
         match run_prompt(agent, rx, renderer, log, input_text.to_string()).await {
             Ok(()) => {}
-            Err(error) if is_model_failure(&error) => {}
-            Err(error) => return Err(error),
+            Err(error) if ends_the_session(&error) => return Err(error),
+            Err(error) => {
+                // A model-level failure is already reported as an event; the two turn-level
+                // errors (no result, turn limit) are not, so name them here.
+                if !is_model_failure(&error) {
+                    println!(
+                        "{}",
+                        renderer
+                            .palette
+                            .yellow(&format!("· 本轮未完成：{error}（会话已保留，可继续输入）"))
+                    );
+                }
+            }
         }
         if let Some(session) = session.as_deref_mut() {
             session.save(agent, renderer.palette);
