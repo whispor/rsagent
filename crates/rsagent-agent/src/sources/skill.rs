@@ -20,7 +20,7 @@
 //! [[tool]]
 //! name = "lint"
 //! description = "Lint a path with the team's rules."
-//! command = "scripts/lint.sh"        # relative to the skill folder, or absolute
+//! command = "scripts/lint.sh"        # resolved inside the skill folder (relative or absolute)
 //! args = ["--strict"]                # fixed args, before the tool's own input
 //! requires_approval = false          # default: true
 //! [tool.parameters]                  # JSON Schema for the model; default is an empty object
@@ -185,6 +185,33 @@ fn resolve_tool(dir: &Path, config: ToolConfig) -> Result<SkillToolSpec, String>
             "tool `{}` runs `{}`, which does not exist",
             config.name,
             program.display()
+        ));
+    }
+
+    // Confine the script to the skill directory. Without this, a manifest could name
+    // `../../bin/sh` (or an absolute path elsewhere), so copying a skill folder — or
+    // cloning a repo that contains one — would grant "run any binary", with
+    // `requires_approval` left to the manifest's own say-so. `canonicalize` also resolves
+    // symlinks, so a link that points outside is refused too.
+    let root = dir.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve the skill directory `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let resolved = program.canonicalize().map_err(|error| {
+        format!(
+            "tool `{}` runs `{}`, which cannot be resolved: {error}",
+            config.name,
+            program.display()
+        )
+    })?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "tool `{}` runs `{}`, which is outside the skill directory `{}`",
+            config.name,
+            program.display(),
+            dir.display()
         ));
     }
 
@@ -488,6 +515,53 @@ mod tests {
         assert!(error.contains("does not exist"), "{error}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_command_escaping_the_skill_directory_is_refused() {
+        // A relative `..` must not reach outside the folder: copying a skill directory must
+        // not be a way to run a binary that sits next to it.
+        let root = scratch("escape-root");
+        let dir = root.join("skill");
+        std::fs::create_dir_all(&dir).expect("create the skill dir");
+        std::fs::write(dir.join(SKILL_FILE), "# A test skill\n").expect("write SKILL.md");
+        std::fs::write(dir.join("run.sh"), "#!/bin/sh\n").expect("write the script");
+        std::fs::write(
+            dir.join("skill.toml"),
+            "[[tool]]\nname = \"t\"\ncommand = \"../evil.sh\"\n",
+        )
+        .expect("write skill.toml");
+        // The target exists, one level up: only the confinement check can stop it.
+        std::fs::write(root.join("evil.sh"), "#!/bin/sh\n").expect("write the outside script");
+
+        let error = SkillSource::new("s", &dir, None).expect_err("escaping must be refused");
+        assert!(error.contains("outside the skill directory"), "{error}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_absolute_command_outside_the_skill_directory_is_refused() {
+        let dir = write_skill("absolute", "[[tool]]\nname = \"t\"\ncommand = \"run.sh\"\n");
+        // Point the manifest at an absolute path to a file that really exists elsewhere.
+        let outside = scratch("absolute-outside");
+        std::fs::write(outside.join("evil.sh"), "#!/bin/sh\n").expect("write the outside script");
+        let manifest = format!(
+            "[[tool]]\nname = \"t\"\ncommand = \"{}\"\n",
+            outside
+                .join("evil.sh")
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
+        );
+        std::fs::write(dir.join("skill.toml"), manifest).expect("rewrite skill.toml");
+
+        let error =
+            SkillSource::new("s", &dir, None).expect_err("an absolute escape must be refused");
+        assert!(error.contains("outside the skill directory"), "{error}");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

@@ -333,7 +333,7 @@ for packaging a team's tools alongside its notes. Point `path` at a directory th
 [[tool]]
 name = "lint"
 description = "Lint a path with the team's rules."
-command = "scripts/lint.sh"        # relative to the skill folder, or absolute
+command = "scripts/lint.sh"        # resolved inside the skill folder (relative or absolute)
 args = ["--strict"]                # fixed args, before the tool's own input
 requires_approval = false          # default: true
 [tool.parameters]                  # JSON Schema for the model; default is an empty object
@@ -348,7 +348,10 @@ a `local` source — so a script is written the same way whichever source runs i
 difference is where the tool list comes from: `local` asks the program (`--describe`),
 while a skill reads its manifest, so the folder is self-describing **without being run**.
 The manifest is validated at load time: a missing `SKILL.md`, a missing or malformed
-`skill.toml`, or a `command` that does not exist is reported and the source is skipped.
+`skill.toml`, a `command` that does not exist, or a `command` that resolves **outside the
+skill folder** (via `..`, an absolute path, or a symlink) is reported and the source is
+skipped. The confinement is deliberate: a skill is a folder you copy or clone, so its
+scripts must not reach a binary that happens to sit next to it.
 
 `requires_approval` defaults to `true` for the same reason as `local` — an arbitrary
 script may do anything. Because each call is its own process (not one long-lived program),
