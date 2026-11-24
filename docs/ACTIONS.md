@@ -1453,7 +1453,7 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 
 ### E1 · M15 · `skill` 的 `command` 可逃出技能目录（**建议优先**）
 
-- **状态**：待办
+- **状态**：已完成 (95a6ed0)
 - **成本**：约 0.5 天 · **影响**：中高（安全）
 - **问题（已验证）**：`crates/rsagent-agent/src/sources/skill.rs:177-181`
 
@@ -1475,6 +1475,26 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 - **验收**：新增单测：manifest 里 `command = "../../evil.sh"` 与 `command = "/bin/sh"`
   （目录外绝对路径）都必须**加载失败**；目录内的 `command = "run.sh"` 仍正常。
 - **关联**：REVIEW.md M15。
+
+```
+- 状态：已完成 (95a6ed0)
+- 实现：`resolve_tool` 在 `program.is_file()` 之后加 `canonicalize()` + `starts_with(root)`
+  约束（`crates/rsagent-agent/src/sources/skill.rs`）。`canonicalize` 同时解掉符号链接，
+  所以「目录外软链」也一并被拒；文件不存在仍先报原来的清晰错误。未新增任何依赖。
+- 新增测试（skill 模块 12 → 14）：
+  - a_command_escaping_the_skill_directory_is_refused —— `command = "../evil.sh"`，
+    且目标文件**确实存在**（上一层），只有约束能拦住它 → 加载失败，错误含
+    "outside the skill directory"。
+  - an_absolute_command_outside_the_skill_directory_is_refused —— 指向目录外一个
+    真实存在的绝对路径 → 加载失败。目录内的 `command = "run.sh"` 仍由既有测试覆盖正常加载。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 281 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+- 文档同步：README「The `skill` source」+ 模块文档改为「resolved inside the skill folder」，
+  并把「command 逃出目录」列入 load-time 校验清单。
+```
 
 ### E2 · M7 · 外部输出无大小上限
 
