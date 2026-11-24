@@ -358,20 +358,25 @@ impl OpenAiStreamParser {
         let mut events = Vec::new();
 
         if let Some(usage) = value.get("usage").and_then(Value::as_object) {
+            // OpenAI's `prompt_tokens` *includes* cache hits (they are a subset, in
+            // `prompt_tokens_details.cached_tokens`), but `Usage::input` is cache-exclusive
+            // — the Anthropic shape — so the cached tokens are subtracted back out.
+            let cached = usage
+                .get("prompt_tokens_details")
+                .and_then(|details| details.get("cached_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let prompt = usage
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             self.usage = Usage {
-                input: usage
-                    .get("prompt_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
+                input: prompt.saturating_sub(cached),
                 output: usage
                     .get("completion_tokens")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
-                cache_read: usage
-                    .get("prompt_tokens_details")
-                    .and_then(|d| d.get("cached_tokens"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
+                cache_read: cached,
                 cache_write: 0,
             };
         }
@@ -663,6 +668,38 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read_file");
         assert_eq!(calls[0].2["path"], "a.txt");
+    }
+
+    #[test]
+    fn usage_normalizes_prompt_tokens_to_a_cache_exclusive_input() {
+        let model = test_model();
+        let mut parser = OpenAiStreamParser::new(&model);
+
+        // OpenAI's `prompt_tokens` (100) *includes* the 40 cached tokens. `Usage::input` is
+        // cache-exclusive, so those must be subtracted out — and `input + cache_read` must
+        // recover the full prompt size, matching how Anthropic already reports it.
+        parser.handle_chunk(&json!({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "prompt_tokens_details": { "cached_tokens": 40 }
+            },
+            "choices": [{ "delta": {} }]
+        }));
+
+        let usage = parser
+            .finish()
+            .into_iter()
+            .find_map(|event| match event {
+                StreamEvent::Done { message, .. } => Some(message.usage),
+                _ => None,
+            })
+            .expect("a Done event");
+
+        assert_eq!(usage.input, 60);
+        assert_eq!(usage.cache_read, 40);
+        assert_eq!(usage.output, 20);
+        assert_eq!(usage.input + usage.cache_read, 100);
     }
 
     #[test]

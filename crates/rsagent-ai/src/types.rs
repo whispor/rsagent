@@ -69,7 +69,14 @@ pub enum StopReason {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
-    /// Input (prompt) tokens billed for this call.
+    /// Input (prompt) tokens billed at the full rate for this call.
+    ///
+    /// Cache-exclusive: tokens served from or written to the provider's prompt cache are
+    /// counted separately in [`cache_read`](Self::cache_read) and
+    /// [`cache_write`](Self::cache_write), so the whole prompt is
+    /// `input + cache_read + cache_write`. Both providers are normalized to this shape —
+    /// OpenAI's `prompt_tokens` already includes cache hits, and they are subtracted out on
+    /// the way in.
     #[serde(default)]
     pub input: u64,
     /// Output (completion) tokens billed for this call.

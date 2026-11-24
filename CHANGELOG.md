@@ -55,6 +55,14 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   / `DEFAULT_RECALL_LIMIT` constants (decision D16 in `docs/EXTENSIBILITY.md`).
 
 ### Changed
+- **Breaking: `Usage::input` is now cache-exclusive on every provider.** The field already
+  documented itself as the *billed* input, but the two providers disagreed: Anthropic's
+  `input_tokens` **excludes** prompt-cache hits, while OpenAI's `prompt_tokens` **includes**
+  them (the cached count is a subset). So summing `input + cache_read` double-counted on
+  OpenAI, and reading `input` alone undercounted on Anthropic — silently, once prompt caching
+  was on. The OpenAI provider now subtracts `prompt_tokens_details.cached_tokens` out of
+  `input`, so `input + cache_read + cache_write` is the whole prompt on both. Only cost and
+  usage figures change — context budgeting uses a character estimate, not `Usage`.
 - **`--faux --print --thinking <level>` now scripts a reasoning block.** The offline demo
   emits a short reasoning block before the answer when a thinking level is requested, so
   the reasoning rendering can be seen (and tested) without a network model.

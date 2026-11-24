@@ -696,6 +696,44 @@ mod tests {
     }
 
     #[test]
+    fn usage_keeps_cache_reads_separate_from_the_billed_input() {
+        let model = test_model();
+        let mut parser = AnthropicStreamParser::new(&model);
+
+        // Anthropic reports cache hits *outside* `input_tokens`; `Usage` keeps that shape, so
+        // `input + cache_read` is the whole prompt. The OpenAI provider normalizes to match.
+        parser.handle_event(&json!({
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 60,
+                    "cache_read_input_tokens": 40,
+                    "cache_creation_input_tokens": 0
+                }
+            }
+        }));
+        parser.handle_event(&json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "output_tokens": 5 }
+        }));
+
+        let usage = parser
+            .finish()
+            .into_iter()
+            .find_map(|event| match event {
+                StreamEvent::Done { message, .. } => Some(message.usage),
+                _ => None,
+            })
+            .expect("a Done event");
+
+        assert_eq!(usage.input, 60);
+        assert_eq!(usage.cache_read, 40);
+        assert_eq!(usage.output, 5);
+        assert_eq!(usage.input + usage.cache_read, 100);
+    }
+
+    #[test]
     fn an_error_event_suppresses_the_success_done() {
         let model = test_model();
         let mut parser = AnthropicStreamParser::new(&model);
