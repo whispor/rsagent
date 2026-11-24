@@ -1233,9 +1233,39 @@ the assertion above is sensitive to the category rather than passing for another
 
 ### D5 · M6 路径基准（用户可见的静默差异）
 
+- **状态**：已完成 (0f6c562)
+- **成本**：约 0.5 天
+
 配置里的相对路径按**进程 cwd** 解析，而不是配置文件目录或 `--cwd`。在 `repo/sub` 下运行
 `path = "./skills/team"` 会找错目录并**被静默跳过**。建议以配置文件所在目录为基准，并写进
 README。成本约 0.5 天。
+
+```
+- 状态：已完成 (0f6c562)
+- 实现：`crates/rsagent/src/config.rs` 的 `load_from` 在解析完每个文件后、**合并之前**调用
+  新的 `resolve_source_paths(&mut sources, file)`：把每个来源的相对 `path` 与**该文件所在
+  目录** join（绝对/带根的路径原样保留）。逐文件解析保证「项目覆盖项按项目文件目录、用户项按
+  用户文件目录」——这正是分层语义想要的结果。
+- 关键细节：判定用 `Path::has_root()` 而**不是** `is_absolute()`。Windows 上 `/opt/team`
+  带根却**不**「绝对」（缺盘符），用 `is_absolute()` 会把它误当相对路径 join 上去（本地实测
+  该测试因此在 Windows 失败，改 `has_root()` 后通过）。
+- 范围：**只解析 `path`**（`skill` 来源用）。`command`（`local`/`mcp-stdio`）**不**重写——
+  它可能是 `PATH` 上的程序名（如 `npx`）。评审方原条目亦只点了 `path`。
+- 新增测试（+2）：
+  - `a_relative_skill_path_is_resolved_against_its_config_file` —— 项目文件里
+    `path = "./skills/team"` → 解析为 `<config_dir>/skills/team`。
+  - `an_absolute_path_and_a_command_are_left_untouched` —— 带根 `path` 原样保留，
+    `command = "./scripts/tool"` 原样保留。
+- A/B 验证：注释掉 `resolve_source_paths` 调用 → 该测试 **FAILED**（`got ./skills/team`，
+  期望绝对路径）；恢复后通过。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 289 通过 / 0 失败（较上轮 +2）
+  - cargo doc ...                    → 0 告警
+- 文档同步：README 配置示例的 `path` 注释 + 「The `skill` source」节、EXTENSIBILITY.md §3.3、
+  CHANGELOG 各记一条。
+```
 
 ### D6 · C 组两条决策（需项目负责人拍板）
 
