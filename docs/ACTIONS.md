@@ -1498,7 +1498,7 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
 
 ### E2 · M7 · 外部输出无大小上限
 
-- **状态**：待办
+- **状态**：已完成 (cbaba0f)
 - **成本**：约 0.5 天 · **影响**：中（内存峰值）
 - **问题（已验证）**：`crates/rsagent-agent/src/tools.rs:467`（`SearchTool` 的实现，起点
   `tools.rs:422`）
@@ -1518,6 +1518,35 @@ D9 成本最低（10 分钟）且已核实，适合下一次顺手带上。
   「已跳过/已截断」的标记。
 - **注意**：不要改变现有 32K **输出**截断的行为——那条是给模型的上下文预算用的，与这里的
   内存上限是两件事。
+
+```
+- 状态：已完成 (cbaba0f)
+- 实现：给所有「外部输出读入」加 8 MiB 上限（`MAX_BODY_BYTES` / `MAX_OUTPUT_BYTES` /
+  `MAX_SEARCH_FILE_BYTES`），超限一律**截断并标记**，不再继续累积：
+  - `search`（`tools.rs`）：读前先查 `metadata().len()`，超过 8 MiB 的文件**跳过不读**，
+    并把跳过的文件名逐条写进结果（`(skipped N file(s) larger than 8 MiB: …)`）。
+  - `bash`（`tools.rs`）与 `subprocess.rs` 的共享缓冲：边读边在 8 MiB 处截断，回退到
+    UTF-8 字符边界，结果尾部追加 `… (output truncated at 8 MiB)`；`subprocess` 的 stdout
+    被截断时按**连接类**失败上报。
+  - `web` / `mcp-http` / `webfetch`：抽出共享的 `sources/http.rs::read_body`，用
+    `response.chunk()` 边收边卡上限。`web` 保留头部并标注截断；`mcp-http` 以连接类失败；
+    `webfetch` 复用同一函数（原有的私有 `read_capped` 已并入）。
+- 新增测试（+3，`agent_loop.rs` 与 `tools.rs` 单测）：
+  - search_skips_files_larger_than_the_read_cap —— 造一个 `CAP+1` 字节的稀疏文件，在
+    **文件开头**埋入匹配串；断言结果里出现小文件的命中、**不**出现超限文件的命中，且
+    超限文件名出现在 `skipped` 标记里。A/B 验证：暂存 `tools.rs` 改动后该测试**失败**
+    （超限文件的命中出现），证明约束真的生效。
+  - output_beyond_the_cap_is_dropped_and_flagged（subprocess）、
+    command_output_beyond_the_cap_is_dropped_and_flagged（bash）—— 断言超限输出被丢弃并打标。
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 285 通过 / 0 失败（较上轮 +3）
+  - cargo doc ...                    → 0 告警
+- 文档同步：README 的 `search`/`glob`、`bash` 表行、`web` 源、`local` 协议四节均注明
+  8 MiB 上限与「截断/跳过并标记」的行为。
+- 边界：32K **模型可见**输出截断保持不变（那是上下文预算，与本内存上限是两件事）。
+```
 
 ### E3 · M11 · REPL 遇 `MaxTurnsExceeded`/`NoResult` 会退出且丢会话
 
