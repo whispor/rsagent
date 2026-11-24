@@ -35,6 +35,8 @@ use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker}
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
+use super::http::{read_body, MAX_BODY_BYTES};
+
 /// Per-request timeout when the configuration does not set one.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -287,7 +289,7 @@ impl Tool for WebTool {
             })?;
 
         let status = response.status();
-        let body = tokio::time::timeout(timeout, response.text())
+        let (body, truncated) = tokio::time::timeout(timeout, read_body(response, MAX_BODY_BYTES))
             .await
             .map_err(|_| {
                 self.breaker.record_failure(Instant::now());
@@ -296,9 +298,8 @@ impl Tool for WebTool {
                     timeout.as_secs()
                 )
             })?
-            .map_err(|error| {
+            .inspect_err(|_| {
                 self.breaker.record_failure(Instant::now());
-                format!("cannot read the response: {error}")
             })?;
 
         // The endpoint answered, so it is reachable — whatever the answer says.
@@ -309,6 +310,17 @@ impl Tool for WebTool {
                 snippet(&body)
             ));
         }
+
+        // A body past the cap is data the model would never see whole anyway; keep the head
+        // and say it was cut, rather than failing a fetch that mostly succeeded.
+        let body = if truncated {
+            format!(
+                "{body}\n… (truncated at {} MiB)",
+                MAX_BODY_BYTES / (1024 * 1024)
+            )
+        } else {
+            body
+        };
 
         let mut result = ToolResult::text(body.clone());
         if let Ok(value) = serde_json::from_str::<Value>(&body) {

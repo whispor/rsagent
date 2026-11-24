@@ -475,6 +475,52 @@ async fn search_reports_matching_lines_with_paths_and_numbers() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[tokio::test]
+async fn search_skips_files_larger_than_the_read_cap() {
+    use std::io::Write;
+
+    // Mirrors `MAX_SEARCH_FILE_BYTES` in `tools.rs`, which is private to that module.
+    const CAP: u64 = 8 * 1024 * 1024;
+
+    let dir = temp_dir("search-cap-it");
+    std::fs::write(dir.join("small.txt"), "needle\n").expect("write small");
+
+    // A file one byte over the cap, seeded with a match *at the top*: if the tool buffered
+    // it whole the match would be found, so its absence proves the read was skipped. The
+    // sparse tail (`set_len`) costs no real disk space.
+    let big = dir.join("big.txt");
+    let mut file = std::fs::File::create(&big).expect("create big");
+    file.write_all(b"needle\n").expect("seed big");
+    file.set_len(CAP + 1).expect("grow big");
+    drop(file);
+
+    let (mut agent, _faux, _events) = harness_in(
+        &dir,
+        vec![
+            FauxResponse::tool_calls(vec![(
+                "search",
+                json!({ "pattern": "needle", "path": dir.to_string_lossy() }),
+            )]),
+            FauxResponse::text("done"),
+        ],
+    );
+
+    agent.prompt("search").await.expect("prompt completes");
+
+    let result = tool_result_text(&agent, "search");
+    assert!(result.contains("small.txt:1: needle"), "got: {result}");
+    assert!(
+        !result.contains("big.txt:1: needle"),
+        "an over-cap file must not be read: {result}"
+    );
+    assert!(
+        result.contains("skipped") && result.contains("big.txt"),
+        "the skipped file must be named: {result}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A unique scratch directory for one test.
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("rsagent-{tag}-{}", std::process::id()));

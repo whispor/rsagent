@@ -273,7 +273,9 @@ run one at a time (never concurrently), and each source has a circuit breaker: a
 three consecutive *connection-class* failures (cannot start, timeout, non-zero exit,
 non-JSON output) it is taken out of the tool list and probed again after a cooldown. A
 well-formed `{"error": ...}` reply is a *business* failure — the program is working, so it
-does not trip the breaker.
+does not trip the breaker. A reply larger than 8 MiB is not buffered whole: the call fails
+as connection-class rather than holding the bytes in memory, so a tool's `content` must
+stay well under that.
 
 #### The `mcp-stdio` source (Model Context Protocol)
 
@@ -371,7 +373,9 @@ existing HTTP API, with no server changes. The model's arguments become the requ
 `headers` are added to every request (how you supply an `Authorization` token). The
 response body becomes the tool's result; when it parses as JSON it is also kept as
 structured `details` for the UI. `name`, `description`, and `parameters` describe the tool
-to the model — `name` defaults to the source id, `parameters` to an empty object.
+to the model — `name` defaults to the source id, `parameters` to an empty object. A body
+larger than 8 MiB is cut at the cap and the result says so, so one huge response cannot
+exhaust memory.
 
 `requires_approval` defaults to `true`: a `GET` on a read-only endpoint can opt out, but
 anything else may change state on the far side. `timeout_secs` (default 60) bounds each
@@ -440,11 +444,13 @@ Run `rsagent tools add --help` for the per-kind fields (`--url`, `--command`, `-
 | `webfetch` | yes | `network` | Fetch an HTTP(S) URL and return it as text (HTML is converted). |
 | `write_file` | yes | `write` | Write a file, creating parent directories. |
 | `edit_file` | yes | `write` | Replace an exact string in a file. |
-| `bash` | yes | `exec` | Run a shell command (killed after a timeout). |
+| `bash` | yes | `exec` | Run a shell command (killed after a timeout; output capped at 8 MiB). |
 
 `search` and `glob` do not descend into build-output or vendor directories (`target`,
 `node_modules`, `.git`, `.venv`, `venv`, `__pycache__`), so matches are not buried
-under generated files. The directory you point them at is still searched.
+under generated files. The directory you point them at is still searched. `search` skips
+files larger than 8 MiB — naming each in its output — rather than reading them whole, so
+one huge file cannot exhaust memory.
 
 Read tools (`read_file`, `list_dir`, `search`, `glob`) are confined to the working
 directory by default: a path that resolves outside it — through `..` or a symlink — is

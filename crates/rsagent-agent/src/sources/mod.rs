@@ -6,6 +6,7 @@
 //! the same [`ToolSource`](crate::ToolSource) trait — see `docs/EXTENSIBILITY.md` §3.2.
 
 mod builtin;
+pub(crate) mod http;
 mod local;
 mod mcp;
 mod mcp_http;

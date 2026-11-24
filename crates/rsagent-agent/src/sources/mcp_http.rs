@@ -43,6 +43,7 @@ use crate::breaker::{BreakerPolicy, BreakerReport, BreakerState, CircuitBreaker}
 use crate::source::{SourceHealth, SourceKind, ToolSource};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
+use super::http::{read_body, MAX_BODY_BYTES};
 use super::mcp::{
     initialize_params, parse_call_result, parse_tools, CallError, McpToolSpec, MCP_PROTOCOL_VERSION,
 };
@@ -225,7 +226,7 @@ impl Connection {
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        let body = tokio::time::timeout(timeout, response.text())
+        let (body, truncated) = tokio::time::timeout(timeout, read_body(response, MAX_BODY_BYTES))
             .await
             .map_err(|_| {
                 CallError::Transport(format!(
@@ -233,7 +234,7 @@ impl Connection {
                     timeout.as_secs()
                 ))
             })?
-            .map_err(|error| CallError::Transport(format!("cannot read the response: {error}")))?;
+            .map_err(CallError::Transport)?;
 
         // Classify by HTTP status before looking at the body. A gateway failure (429, or
         // any 5xx) means the endpoint cannot serve right now — connection-class, so it
@@ -245,6 +246,15 @@ impl Connection {
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
             return Err(CallError::Transport(format!(
                 "the MCP endpoint returned HTTP {status}"
+            )));
+        }
+
+        // A capped body is not valid JSON-RPC, so report it here rather than as a confusing
+        // parse error. Connection-class: the endpoint is not honouring the contract.
+        if truncated {
+            return Err(CallError::Transport(format!(
+                "the MCP endpoint sent more than {} MiB",
+                MAX_BODY_BYTES / (1024 * 1024)
             )));
         }
 

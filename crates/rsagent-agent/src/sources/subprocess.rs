@@ -29,6 +29,16 @@ use crate::tool::ToolResult;
 /// that wait so a turn can never hang on a backgrounded daemon.
 pub(crate) const DRAIN_GRACE: Duration = Duration::from_secs(1);
 
+/// Cap on how many bytes of a program's output are buffered.
+///
+/// A tool's reply is JSON that the model sees truncated to its context budget anyway, so a
+/// multi-megabyte reply is already wasted work. Bounding the buffer keeps one runaway
+/// program from setting the process's memory peak. The pipe is still drained to EOF, so the
+/// program never blocks on a full pipe — only the *stored* bytes are capped.
+///
+/// The `bash` tool reuses this cap for the same reason (see `tools.rs`).
+pub(crate) const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Run `argv` once, optionally sending `request` on stdin, and return its trimmed stdout.
 ///
 /// `argv[0]` is the program; the rest are its arguments.
@@ -58,8 +68,8 @@ pub(crate) async fn run(
 
     // Drain both pipes on their own tasks so a full buffer cannot deadlock the wait. The
     // output accumulates in a shared buffer, so an aborted drain still yields what arrived.
-    let stdout_sink = Arc::new(StdMutex::new(Vec::new()));
-    let stderr_sink = Arc::new(StdMutex::new(Vec::new()));
+    let stdout_sink = Arc::new(StdMutex::new(OutputBuffer::default()));
+    let stderr_sink = Arc::new(StdMutex::new(OutputBuffer::default()));
     let mut stdout_task = tokio::spawn(drain_into(child.stdout.take(), Arc::clone(&stdout_sink)));
     let mut stderr_task = tokio::spawn(drain_into(child.stderr.take(), Arc::clone(&stderr_sink)));
 
@@ -100,6 +110,7 @@ pub(crate) async fn run(
     // The process has exited; give the pipes a moment to flush, then stop waiting.
     drain_within(&mut stdout_task).await;
     drain_within(&mut stderr_task).await;
+    let stdout_truncated = sink_is_truncated(&stdout_sink);
     let stdout = take_text(&stdout_sink);
     let stderr = take_text(&stderr_sink);
 
@@ -109,13 +120,32 @@ pub(crate) async fn run(
             .map_or_else(|| "a signal".to_string(), |code| code.to_string());
         return Err(format!("`{label}` exited with {code}: {}", stderr.trim()));
     }
+    // A capped stdout is not valid JSON, so report it here rather than as a confusing
+    // parse error. This is connection-class: the program is not honouring the contract.
+    if stdout_truncated {
+        return Err(format!(
+            "`{label}` produced more than {} MiB of output",
+            MAX_OUTPUT_BYTES / (1024 * 1024)
+        ));
+    }
     Ok(stdout.trim().to_string())
+}
+
+/// A shared output buffer that stops growing at [`MAX_OUTPUT_BYTES`].
+///
+/// The drain keeps reading past the cap — so a chatty program never blocks on a full pipe —
+/// but stores nothing more, and records that it did so.
+#[derive(Default)]
+struct OutputBuffer {
+    bytes: Vec<u8>,
+    truncated: bool,
 }
 
 /// Read a pipe to the end into `sink`, ignoring errors (a broken pipe shows in the exit
 /// status). Bytes are accumulated, not decoded, so a multi-byte character split across
-/// reads is never corrupted.
-async fn drain_into<R: AsyncRead + Unpin>(reader: Option<R>, sink: Arc<StdMutex<Vec<u8>>>) {
+/// reads is never corrupted. Storage stops at [`MAX_OUTPUT_BYTES`], but the pipe is drained
+/// to the end regardless.
+async fn drain_into<R: AsyncRead + Unpin>(reader: Option<R>, sink: Arc<StdMutex<OutputBuffer>>) {
     let Some(mut reader) = reader else {
         return;
     };
@@ -124,8 +154,14 @@ async fn drain_into<R: AsyncRead + Unpin>(reader: Option<R>, sink: Arc<StdMutex<
         match reader.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(read) => {
-                if let Ok(mut bytes) = sink.lock() {
-                    bytes.extend_from_slice(&chunk[..read]);
+                if let Ok(mut buffer) = sink.lock() {
+                    let room = MAX_OUTPUT_BYTES.saturating_sub(buffer.bytes.len());
+                    if read > room {
+                        buffer.bytes.extend_from_slice(&chunk[..room]);
+                        buffer.truncated = true;
+                    } else {
+                        buffer.bytes.extend_from_slice(&chunk[..read]);
+                    }
                 }
             }
         }
@@ -141,11 +177,18 @@ pub(crate) async fn drain_within(task: &mut JoinHandle<()>) {
 }
 
 /// Decode a shared byte sink into a string (lossily, in case the drain was aborted mid-character).
-fn take_text(sink: &Arc<StdMutex<Vec<u8>>>) -> String {
-    let bytes = sink
+fn take_text(sink: &Arc<StdMutex<OutputBuffer>>) -> String {
+    let buffer = sink
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    String::from_utf8_lossy(&bytes).into_owned()
+    String::from_utf8_lossy(&buffer.bytes).into_owned()
+}
+
+/// Whether the drain hit [`MAX_OUTPUT_BYTES`] (see [`OutputBuffer::truncated`]).
+fn sink_is_truncated(sink: &Arc<StdMutex<OutputBuffer>>) -> bool {
+    sink.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .truncated
 }
 
 /// Read a `{"content"|"error"}` reply into a tool result.
@@ -173,9 +216,31 @@ pub(crate) fn parse_response(value: &Value) -> Result<ToolResult, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_response, run};
+    use super::{drain_into, parse_response, run, OutputBuffer, MAX_OUTPUT_BYTES};
     use serde_json::json;
+    use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn output_beyond_the_cap_is_dropped_and_flagged() {
+        // A reader with more bytes than the cap: storage must stop at the cap and flag the
+        // truncation, while the read itself runs to the end (the pipe is still drained).
+        let data = vec![b'a'; MAX_OUTPUT_BYTES + 4096];
+        let sink = Arc::new(StdMutex::new(OutputBuffer::default()));
+
+        drain_into(Some(&data[..]), Arc::clone(&sink)).await;
+
+        let buffer = sink.lock().expect("lock");
+        assert!(
+            buffer.truncated,
+            "a buffer that hit the cap must be flagged"
+        );
+        assert_eq!(
+            buffer.bytes.len(),
+            MAX_OUTPUT_BYTES,
+            "storage must stop at the cap"
+        );
+    }
 
     #[tokio::test]
     async fn a_pipe_held_open_by_a_grandchild_does_not_hang_the_run() {

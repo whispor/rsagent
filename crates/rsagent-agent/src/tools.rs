@@ -18,7 +18,8 @@ use crate::glob::glob_match;
 use crate::html::html_to_text;
 use crate::memory::DEFAULT_RECALL_LIMIT;
 use crate::platform;
-use crate::sources::subprocess::drain_within;
+use crate::sources::http::read_body;
+use crate::sources::subprocess::{drain_within, MAX_OUTPUT_BYTES};
 use crate::tool::{Tool, ToolContext, ToolResult};
 
 /// Directory names that recursive tools never descend into.
@@ -418,6 +419,14 @@ impl Tool for ListDirTool {
 #[derive(Debug)]
 pub struct SearchTool;
 
+/// Files larger than this are skipped by [`SearchTool`] rather than read into memory.
+///
+/// The scan needs a whole file in memory to walk its lines, and the 32K *output* cap
+/// truncates only *after* that read — so without a read-side limit a single huge file sets
+/// the process's memory peak. 8 MiB is far above any real source file, so ordinary searches
+/// are unaffected.
+const MAX_SEARCH_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
 #[async_trait]
 impl Tool for SearchTool {
     fn spec(&self) -> ToolSpec {
@@ -458,11 +467,21 @@ impl Tool for SearchTool {
         // stop the moment `max_results` is reached.
         let mut stack = vec![root.clone()];
         let mut matches: Vec<String> = Vec::new();
+        let mut skipped: Vec<PathBuf> = Vec::new();
 
         'walk: while let Some(dir) = stack.pop() {
             let children = read_children(&dir).await?;
             stack.extend(children.dirs);
             for entry_path in children.files {
+                // Bound the read: skip a file too large to hold in memory rather than
+                // buffering it whole. `metadata` is cheap next to the read it avoids.
+                if tokio::fs::metadata(&entry_path)
+                    .await
+                    .is_ok_and(|meta| meta.len() > MAX_SEARCH_FILE_BYTES)
+                {
+                    skipped.push(entry_path);
+                    continue;
+                }
                 // Skip unreadable or non-UTF-8 files rather than failing the search.
                 let Ok(text) = tokio::fs::read_to_string(&entry_path).await else {
                     continue;
@@ -481,6 +500,19 @@ impl Tool for SearchTool {
                     }
                 }
             }
+        }
+
+        if !skipped.is_empty() {
+            let names = skipped
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            matches.push(format!(
+                "(skipped {} file(s) larger than {} MiB: {names})",
+                skipped.len(),
+                MAX_SEARCH_FILE_BYTES / (1024 * 1024)
+            ));
         }
 
         if matches.is_empty() {
@@ -661,7 +693,7 @@ impl Tool for WebFetchTool {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.contains("html"));
 
-        let body = read_capped(response, self.max_bytes).await?;
+        let (body, _truncated) = read_body(response, self.max_bytes).await?;
         if !status.is_success() {
             let preview: String = body.chars().take(2_000).collect();
             return Err(format!("HTTP {status} from {url}\n{preview}"));
@@ -673,27 +705,6 @@ impl Tool for WebFetchTool {
         }
         Ok(ToolResult::text(text))
     }
-}
-
-/// Read a response body, stopping after `max_bytes` so a huge page cannot exhaust memory.
-async fn read_capped(mut response: reqwest::Response, max_bytes: usize) -> Result<String, String> {
-    let mut buffer: Vec<u8> = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("failed to read response body: {error}"))?
-    {
-        let remaining = max_bytes.saturating_sub(buffer.len());
-        if remaining == 0 {
-            break;
-        }
-        let take = remaining.min(chunk.len());
-        buffer.extend_from_slice(&chunk[..take]);
-        if take < chunk.len() {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&buffer).into_owned())
 }
 
 /// Run a shell command in the working directory and return its combined output.
@@ -792,8 +803,8 @@ impl Tool for BashTool {
         // Drain each pipe on its own task so a full buffer cannot deadlock the wait,
         // and so lines can be streamed as progress while the command runs. Output also
         // lands in a shared sink, so a bounded drain below still yields what arrived.
-        let stdout_sink = Arc::new(StdMutex::new(String::new()));
-        let stderr_sink = Arc::new(StdMutex::new(String::new()));
+        let stdout_sink = Arc::new(StdMutex::new(TextBuffer::default()));
+        let stderr_sink = Arc::new(StdMutex::new(TextBuffer::default()));
         let mut stdout_task = tokio::spawn(stream_pipe(
             child.stdout.take(),
             context.progress().cloned(),
@@ -834,8 +845,8 @@ impl Tool for BashTool {
         // after a short grace so a backgrounded daemon cannot hang the turn.
         drain_within(&mut stdout_task).await;
         drain_within(&mut stderr_task).await;
-        let stdout = take_sink(&stdout_sink);
-        let stderr = take_sink(&stderr_sink);
+        let (stdout, stdout_capped) = take_sink(&stdout_sink);
+        let (stderr, stderr_capped) = take_sink(&stderr_sink);
         let mut combined = String::new();
         if !stdout.is_empty() {
             combined.push_str(&stdout);
@@ -845,6 +856,18 @@ impl Tool for BashTool {
                 combined.push('\n');
             }
             combined.push_str(&stderr);
+        }
+        // The model sees the output truncated to its context budget anyway; say so when the
+        // capture itself was cut, rather than implying the command printed no more.
+        if stdout_capped || stderr_capped {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            let _ = write!(
+                combined,
+                "… (output truncated at {} MiB)",
+                MAX_OUTPUT_BYTES / (1024 * 1024)
+            );
         }
 
         match status.code() {
@@ -859,14 +882,25 @@ impl Tool for BashTool {
     }
 }
 
+/// A shared text buffer that stops growing at [`MAX_OUTPUT_BYTES`].
+///
+/// The stream keeps reading past the cap — so a chatty command never blocks on a full pipe —
+/// but stores nothing more, and records that it did so.
+#[derive(Default)]
+struct TextBuffer {
+    text: String,
+    truncated: bool,
+}
+
 /// Read a pipe to the end, streaming each line to `progress` and appending it to `sink`.
 ///
 /// Lines are decoded only once a full line (ending in `\n`, or the final partial at EOF)
-/// has been read, so a multi-byte character is never split.
+/// has been read, so a multi-byte character is never split. Storage stops at
+/// [`MAX_OUTPUT_BYTES`], but the pipe is read to the end regardless.
 async fn stream_pipe<R>(
     pipe: Option<R>,
     progress: Option<UnboundedSender<String>>,
-    sink: Arc<StdMutex<String>>,
+    sink: Arc<StdMutex<TextBuffer>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -886,19 +920,32 @@ async fn stream_pipe<R>(
                 if let Some(sender) = &progress {
                     let _ = sender.send(line.trim_end_matches(['\n', '\r']).to_string());
                 }
-                if let Ok(mut text) = sink.lock() {
-                    text.push_str(&line);
+                if let Ok(mut buffer) = sink.lock() {
+                    let room = MAX_OUTPUT_BYTES.saturating_sub(buffer.text.len());
+                    if line.len() > room {
+                        // Never cut mid-character: back the boundary up to the previous one.
+                        let mut cut = room;
+                        while cut > 0 && !line.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        buffer.text.push_str(&line[..cut]);
+                        buffer.truncated = true;
+                    } else {
+                        buffer.text.push_str(&line);
+                    }
                 }
             }
         }
     }
 }
 
-/// Snapshot a shared output sink, tolerating a poisoned lock.
-fn take_sink(sink: &Arc<StdMutex<String>>) -> String {
-    sink.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+/// Snapshot a shared output sink, tolerating a poisoned lock. The bool is whether the
+/// buffer hit [`MAX_OUTPUT_BYTES`].
+fn take_sink(sink: &Arc<StdMutex<TextBuffer>>) -> (String, bool) {
+    let buffer = sink
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (buffer.text.clone(), buffer.truncated)
 }
 
 /// The error the memory tools return when the agent has no memory attached.
@@ -1052,6 +1099,23 @@ mod tests {
 
     fn names(tools: &[Box<dyn super::Tool>]) -> Vec<String> {
         tools.iter().map(|tool| tool.spec().name).collect()
+    }
+
+    #[tokio::test]
+    async fn command_output_beyond_the_cap_is_dropped_and_flagged() {
+        use super::{stream_pipe, take_sink, TextBuffer, MAX_OUTPUT_BYTES};
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        // A reader with more than the cap and no newline: `stream_pipe` reads it as one line
+        // at EOF, so the cap must cut it and flag the cut (the read still runs to the end).
+        let data = vec![b'a'; MAX_OUTPUT_BYTES + 4096];
+        let sink = Arc::new(StdMutex::new(TextBuffer::default()));
+
+        stream_pipe(Some(&data[..]), None, Arc::clone(&sink)).await;
+
+        let (text, truncated) = take_sink(&sink);
+        assert!(truncated, "a buffer that hit the cap must be flagged");
+        assert_eq!(text.len(), MAX_OUTPUT_BYTES, "storage must stop at the cap");
     }
 
     #[test]
