@@ -153,6 +153,41 @@
 
 原为每约 30 分钟；稳定期空跑过多，已按负责人要求改为**每 4 小时**（2026-11-23 生效）。
 
+### 📋 可直接粘贴给执行方的工单（C1 + C2）
+
+> **为什么要这一段**：项目自 2026-11-24 完成 E 组后已闲置，**队列只剩 C1 + C2，且都已决策**。
+> 执行方按既定工作流**只在对话中被要求时才动手**——所以缺的不是分析，是**一个指令**。
+> 下面这段可**原样复制**给执行方；它自包含，不需要它再回来读本文件。
+
+```text
+请按 docs/ACTIONS.md §1.5 的「决策一」和「决策二」实现 C1 与 C2 两条。
+两条都已由项目负责人拍板，执行要点与验收标准都在那一节里，照做即可。要点重述：
+
+【C1】只读命令不启动进程
+- 目标：`--list-tools` / `rsagent tools list` / `rsagent tools doctor` 只读配置，不 spawn
+  任何进程、不发任何请求。
+- 已核实：6 种 kind 里只有 local / mcp-stdio / mcp-http 在构造时会触达外部
+  （local 跑 `--describe`、mcp-stdio spawn 服务端、mcp-http 发 initialize）。
+  builtin / skill / web 构造时**不触达外部**，只读模式下**应照常装配并列出工具**，
+  不要一刀切全部跳过。
+- 不要用 `spawn: bool` 参数——项目 lint 禁止布尔参数（AGENTS.md 明写要改用 enum）。
+  取一个二值 enum（如 `SourceMode::{Assemble, DeclaredOnly}`）。
+- `tools doctor` 对未启动的来源报「未检查（只读模式）」，**且不计为问题**——
+  否则会与 D4 的退出码逻辑打架，让只读命令恒红。
+- 验收：① 让某个 local 来源的 `command` 指向一个会写文件的脚本，跑三个只读命令后
+  断言该文件**未**出现；② 断言 builtin/skill/web 三种来源在只读模式下**仍列出工具**。
+
+【C2】蒸馏笔记每 5 轮最多一条
+- 在 agent.rs 的压缩路径加轮次计数器，距上次写蒸馏笔记不足 5 轮则跳过写入。
+- **只加频率门**：不改 distill_messages 的内容与格式，不动 Memory 的存储约定（D16）。
+  计数器是每会话状态，不持久化。
+- 验收：连续触发 6 次裁剪 → 断言 `[compacted]` 笔记**只增加 1 条**。
+
+【通用】过四道门禁（本机 Windows 需 `CARGO_PROFILE_DEV_DEBUG=0`）；README 的「信任边界」
+与「Managing tool sources」两节、以及 Memory 节要同步；CHANGELOG 各记一条。
+做完把 docs/ACTIONS.md 里 C1/C2 的状态改为「已完成 (<commit>)」并附验收证据。
+```
+
 ---
 
 ## 2. 任务队列（按性价比排序，从上往下做）
