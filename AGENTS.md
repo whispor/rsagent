@@ -27,6 +27,36 @@ reason in the PR description.
 5. **Documentation is part of the change.** A new public item has a doc comment and an
    example; a new behavior is reflected in `README.md` or `docs/`.
 
+## Architecture rules
+
+Four rules shape how code is written, one level below the north stars. They are
+prescriptive: when a change can follow one, follow it.
+
+1. **Prefer newtypes.** Wrap a primitive that carries a meaning of its own in a distinct
+   type, so the type system — not a comment or a naming convention — keeps two look-alike
+   values from being swapped. A newtype also gives one place to hold its invariants and its
+   conversions (the shape being `struct SessionId(String)`, `struct ToolName(String)`).
+
+2. **Avoid unnecessary `Arc`.** Reach for shared ownership only when ownership genuinely
+   crosses a thread or a lifetime. Prefer designing the data so a single owner is enough —
+   pass `&T`, move the value, or split the struct — over wrapping it in `Arc` to quiet the
+   borrow checker. In this tree `Arc` appears only where sharing is real: the cancel flag
+   (`cancel.rs`), the per-source circuit breaker, and the optional memory store.
+
+3. **Prefer channels over shared state.** When data crosses a thread or task boundary, send
+   it down a channel instead of guarding a shared cell with a lock. The event stream
+   (`AgentEvent` over an unbounded `mpsc`) and the CLI input handle (`input.rs`) both work
+   this way. Reach for a `Mutex` only for state that is genuinely shared, not merely handed
+   from one task to another.
+
+4. **Express abstraction with traits and the type system — and keep hot loops
+   allocation-free.** Model a choice as an enum, never as a boolean flag
+   (`SourceMode::{Assemble, DeclaredOnly}`, `Permission`, `StopReason`); let traits carry
+   the seams (`Tool`, `Provider`, `Approver`, `ToolSource`). In the turn loop
+   (`Agent::run_turns`) and per-tool execution, avoid needless heap allocation: borrow or
+   reuse a buffer instead of building a fresh `String`/`Vec` every iteration when the
+   existing one will do.
+
 ## Before you push
 
 The full gate, all of it required:

@@ -53,6 +53,10 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   for good. The store keeps the most recent 200 notes. New public API: `Memory`,
   `MemoryEntry`, `RememberTool`, `RecallTool`, `memory_tools`, and the `DEFAULT_MEMORY_CAP`
   / `DEFAULT_RECALL_LIMIT` constants (decision D16 in `docs/EXTENSIBILITY.md`).
+- **Architecture rules** — `AGENTS.md` now states four code-level rules that sit below the
+  north stars: prefer newtypes; avoid unnecessary `Arc`; prefer channels over shared state;
+  express abstraction with traits and the type system, and keep hot loops allocation-free.
+  `docs/ARCHITECTURE.md` §2 points to them.
 
 ### Changed
 - **Breaking: `Usage::input` is now cache-exclusive on every provider.** The field already

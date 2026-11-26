@@ -64,6 +64,14 @@ That is what makes the lower two crates reusable as libraries.
 | `rsagent-agent` | Run the loop · 运行循环 | `Agent`, `Tool`, `Approver`, `AgentEvent` |
 | `rsagent` | Be a CLI · 作为命令行 | `Cli`, `Renderer`, `InputHandle` |
 
+The **code-level rules** that keep this tree healthy — newtypes over bare primitives,
+`Arc` only where sharing is real, channels over shared state, traits over boolean flags —
+live in [`AGENTS.md`](../AGENTS.md), under *Architecture rules*.
+
+保持这棵树健康的**代码级规则**——用 newtype 取代裸基本类型、仅在确有共享处用 `Arc`、用通道
+取代共享状态、用 trait 取代布尔标志——见 [`AGENTS.md`](../AGENTS.md) 的 *Architecture
+rules* 一节。
+
 ---
 
 ## 3. Lifecycle of one run · 一次运行的生命周期
