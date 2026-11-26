@@ -1,16 +1,19 @@
 //! End-to-end tests for the agent loop, driven by the offline `FauxProvider`.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::stream;
 use rsagent_agent::{
     builtin_tools, memory_tools, Agent, AgentError, AgentEvent, Approver, Memory, PathFence,
-    Permission, UnhealthySource,
+    Permission, Tool, ToolContext, ToolResult, UnhealthySource,
 };
 use rsagent_ai::{
     AssistantMessage, ContentBlock, Context, EventStream, FauxProvider, FauxResponse, Message,
-    Model, Models, Provider, StopReason, StreamEvent, StreamOptions,
+    Model, Models, Provider, StopReason, StreamEvent, StreamOptions, ToolSpec,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -46,6 +49,23 @@ fn assistant_texts(agent: &Agent) -> Vec<String> {
         .iter()
         .filter_map(|m| match m {
             Message::Assistant(a) => Some(a.to_text()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The text of every user message in the transcript, in order.
+fn user_texts(agent: &Agent) -> Vec<String> {
+    agent
+        .messages()
+        .iter()
+        .filter_map(|m| match m {
+            Message::User(u) => Some(
+                u.content
+                    .iter()
+                    .filter_map(ContentBlock::as_text)
+                    .collect::<String>(),
+            ),
             _ => None,
         })
         .collect()
@@ -1152,4 +1172,184 @@ async fn compaction_notes_are_rate_limited_to_one_per_few_turns() {
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn steering_injects_a_message_mid_run() {
+    let (mut agent, faux, _events) = harness(vec![
+        FauxResponse::tool_calls(vec![("read_file", json!({ "path": "Cargo.toml" }))]),
+        FauxResponse::text("done"),
+    ]);
+    // Queue a steering message. The public API exposes no in-flight handle (`steer` takes
+    // `&mut self`, and unlike `abort` there is no clonable token), so it is queued up front
+    // and injected at the first turn boundary — as a user message, distinct from the prompt.
+    agent.steer("also check the tests");
+
+    agent.prompt("start").await.expect("prompt completes");
+
+    assert_eq!(
+        user_texts(&agent),
+        vec!["start".to_string(), "also check the tests".to_string()],
+        "a steering message is injected into the transcript as a user message"
+    );
+    assert_eq!(
+        faux.call_count(),
+        2,
+        "the tool call carried the run into a second request, so steering reached a turn"
+    );
+}
+
+#[tokio::test]
+async fn follow_up_keeps_the_run_going() {
+    let (mut agent, faux, _events) = harness(vec![
+        FauxResponse::text("first reply"),
+        FauxResponse::text("second reply"),
+    ]);
+    // Queue follow-up work before the run: it is injected only once the agent would stop.
+    agent.follow_up("keep going");
+
+    agent.prompt("start").await.expect("prompt completes");
+
+    assert_eq!(
+        assistant_texts(&agent),
+        vec!["first reply".to_string(), "second reply".to_string()],
+        "a queued follow-up adds a turn instead of letting the run stop"
+    );
+    assert!(
+        user_texts(&agent).contains(&"keep going".to_string()),
+        "the follow-up is injected as a user message"
+    );
+    assert_eq!(
+        faux.call_count(),
+        2,
+        "the follow-up forced a second request"
+    );
+}
+
+#[tokio::test]
+async fn aborting_a_run_ends_it_without_an_error() {
+    let (mut agent, faux, mut events) = harness(vec![FauxResponse::text("y".repeat(200))]);
+    // Pace the stream so the run is genuinely in flight when it is aborted.
+    let _ = faux.with_chunk_delay(Duration::from_millis(20));
+
+    let token = agent.cancel_token();
+    tokio::spawn(async move {
+        // Abort only once the turn is actually streaming, from a separate task — the same
+        // way an embedder cancels a run it started elsewhere.
+        while let Some(event) = events.recv().await {
+            if matches!(event, AgentEvent::MessageUpdate { .. }) {
+                token.cancel();
+                break;
+            }
+        }
+    });
+
+    let result = agent.prompt("hi").await;
+
+    assert!(
+        result.is_ok(),
+        "a user abort ends the run with Ok, not an error: {result:?}"
+    );
+    assert!(
+        agent.error_message().is_none(),
+        "an abort is not a model error"
+    );
+    assert!(
+        assistant_texts(&agent).is_empty(),
+        "the aborted turn must not produce a completed assistant message"
+    );
+}
+
+/// A shared counter that records the peak number of tool executions in flight at once.
+#[derive(Default)]
+struct ConcurrencyProbe {
+    active: AtomicUsize,
+    peak: AtomicUsize,
+    runs: AtomicUsize,
+}
+
+impl ConcurrencyProbe {
+    fn enter(&self) {
+        let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+    }
+
+    fn leave(&self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A tool that records concurrency around a short await, and declares whether the batch
+/// containing it must run sequentially.
+struct ProbeTool {
+    name: &'static str,
+    sequential: bool,
+    probe: Arc<ConcurrencyProbe>,
+}
+
+#[async_trait]
+impl Tool for ProbeTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            self.name,
+            "Records execution concurrency.",
+            json!({ "type": "object" }),
+        )
+    }
+
+    fn is_sequential(&self) -> bool {
+        self.sequential
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        _args: Value,
+        _context: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        self.probe.enter();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.probe.leave();
+        self.probe.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolResult::text(format!("{} ran", self.name)))
+    }
+}
+
+#[tokio::test]
+async fn a_sequential_tool_is_not_run_in_parallel_with_others() {
+    let probe = Arc::new(ConcurrencyProbe::default());
+    let faux = FauxProvider::new();
+    faux.set_responses(vec![
+        FauxResponse::tool_calls(vec![
+            ("probe_parallel", json!({})),
+            ("probe_sequential", json!({})),
+        ]),
+        FauxResponse::text("done"),
+    ]);
+    let mut models = Models::new();
+    models.register(faux.clone());
+
+    let mut agent = Agent::new(models, faux.model(), "system").with_tools(vec![
+        Box::new(ProbeTool {
+            name: "probe_parallel",
+            sequential: false,
+            probe: Arc::clone(&probe),
+        }),
+        Box::new(ProbeTool {
+            name: "probe_sequential",
+            sequential: true,
+            probe: Arc::clone(&probe),
+        }),
+    ]);
+    let (tx, _events) = tokio::sync::mpsc::unbounded_channel();
+    agent.subscribe(tx);
+
+    agent.prompt("go").await.expect("prompt completes");
+
+    assert_eq!(probe.runs.load(Ordering::SeqCst), 2, "both tools ran");
+    assert_eq!(
+        probe.peak.load(Ordering::SeqCst),
+        1,
+        "a batch containing a sequential tool must run its calls one at a time"
+    );
 }
