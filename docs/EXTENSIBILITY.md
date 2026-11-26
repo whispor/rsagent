@@ -326,8 +326,8 @@ Closed / Open / HalfOpen、连续失败计数、冷却翻倍且有上限、半�
 CLI 只加一个子命令组，避免参数爆炸：
 
 ```bash
-rsagent tools list            # 每个来源、每个工具、健康状态（含持久化的熔断状态）
-rsagent tools doctor          # 逐个来源做一次探测，报告问题与修复建议
+rsagent tools list            # 每个来源、每个工具、健康状态（含持久化的熔断状态）；只读
+rsagent tools doctor          # 逐来源检查配置，报告问题与修复建议；只读
 rsagent tools add <source>    # 把一行 `[[tools.sources]]` 写进 rsagent.toml
 rsagent tools remove <id>     # 从 rsagent.toml 移除并调用 uninstall()
 rsagent tools reset [id]      # 清除持久化的熔断状态（省略 id 清全部），见 §3.5
@@ -345,8 +345,12 @@ MCP 的 `npx -y` 会在首次运行时自行拉包，所以"安装"对多数来�
   缺失都只提示、不回滚——"先让配置正确"本身就是目的。
 - `remove` 只删配置项，并 best-effort 调该来源的 `uninstall()`；两者都 MUST 幂等，
   且 MUST NOT 触碰用户数据。
-- `doctor` 对每个来源做一次装配探测，失败时打印**按 kind 定制的修复提示**并以非零码
-  退出，因此可直接当 CI 门禁使用。
+- `list` / `doctor` 是**只读**的：不启动 `local` / `mcp-stdio` / `mcp-http` 来源，只从配置
+  描述它们，健康状态记为 `未检查`（`SourceHealth::NotChecked`）——只读命令 MUST NOT 运行
+  仓库声明的程序（见 README「信任边界」）。`builtin` / `skill` / `web` 构造时不触达外部，
+  仍照常装配并列出工具。
+- `doctor` 逐来源检查配置，失败时打印**按 kind 定制的修复提示**并以非零码退出，因此可直接
+  当 CI 门禁使用（它校验配置，不探测可达性）。
 
 ### 3.7 记忆层 · Memory ✅
 

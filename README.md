@@ -212,8 +212,9 @@ required = ["city"]
 With no `rsagent.toml` you get exactly the built-ins, narrowed by `--tools` / `--no-bash`.
 A file that exists but does not parse is reported on stderr, never silently ignored; a
 single source that fails to load is reported and **skipped**, so one broken source cannot
-take the whole agent down. `--list-tools` prints every source, its health, and the
-assembled tools.
+take the whole agent down. `--list-tools` prints every source and the assembled tools; it is
+read-only, so a `local` / `mcp-stdio` / `mcp-http` source is listed from configuration
+without being started, and its health reads **not checked**.
 
 The precedence is **CLI flags > environment > project `rsagent.toml` > user `rsagent.toml`
 > built-in defaults**: `--tools` replaces a built-in source's `only`, and `--no-bash` adds
@@ -225,8 +226,8 @@ merged by `id` (the project entry wins).
 `rsagent tools` edits `rsagent.toml` for you and probes what you have:
 
 ```bash
-rsagent tools list                     # sources, health, and the assembled tools
-rsagent tools doctor                   # probe every source; non-zero exit on failure
+rsagent tools list                     # sources and the assembled tools (read-only)
+rsagent tools doctor                   # check each source's configuration; non-zero on a failure
 rsagent tools add weather --kind web --url https://example.com/api --name get_weather
 rsagent tools remove weather
 rsagent tools reset weather            # clear persisted circuit-breaker state
@@ -238,8 +239,11 @@ rsagent tools reset weather            # clear persisted circuit-breaker state
 best-effort runs the source's install hook (an offline endpoint or a missing program is
 reported, not rolled back), and `remove` only drops the entry and calls the source's
 uninstall hook. **Neither ever deletes your data.** `add` refuses a duplicate `id`
-rather than overwriting it. `doctor` is a usable CI gate: it exits non-zero if any source
-fails to load, printing a kind-specific fix hint.
+rather than overwriting it. `doctor` is a usable CI gate: it exits non-zero when a source
+will not load from its configuration, printing a kind-specific fix hint. `list` and
+`doctor` are **read-only**: they never start a `local` / `mcp-stdio` / `mcp-http` source, so
+its tools and health are reported as **not checked** rather than probed — a read-only command
+must not run a program a repository declares.
 
 Each source guards itself with a circuit breaker (see `docs/EXTENSIBILITY.md` §3.5). Its
 state is snapshotted to `.rsagent-breakers.json` in the working directory after every run
@@ -654,12 +658,14 @@ id, so a repo can pin or override a globally-declared source. The overall preced
 | `NO_COLOR` | Disable ANSI colors when set to a non-empty value. |
 
 > **Trust boundary.** A project `rsagent.toml` and a `.env` are treated as **executable
-> input**, not data. A `[[tools.sources]]` entry can spawn a program (`local`, `mcp-stdio`,
-> `skill`), so `git clone && rsagent --list-tools` runs whatever the repo declares — before
-> any approval prompt. Two variables are therefore refused from `.env` outright:
-> `RSAGENT_BASE_URL` (it would redirect your API key) and `RSAGENT_USER_CONFIG` (it would
-> point the user config at a repo-controlled file). Only run rsagent in a repository whose
-> configuration you trust.
+> input**, not data. A `[[tools.sources]]` entry can spawn a program (`local`, `mcp-stdio`)
+> or send a request (`mcp-http`) — but only when the agent actually runs. The read-only
+> commands (`--list-tools`, `tools list`, `tools doctor`) never start a source: they report
+> it from configuration and mark its health **not checked**, so `git clone && rsagent
+> --list-tools` cannot run whatever the repo declares. Two variables are therefore refused
+> from `.env` outright: `RSAGENT_BASE_URL` (it would redirect your API key) and
+> `RSAGENT_USER_CONFIG` (it would point the user config at a repo-controlled file). Only run
+> rsagent in a repository whose configuration you trust.
 
 The `--help` output shows the env variable backing each flag but never its value.
 Colors are also disabled automatically when stdout is not a terminal, so redirected

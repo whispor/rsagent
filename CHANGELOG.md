@@ -216,6 +216,19 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
 - Context compaction measures each message once, instead of re-serializing every message
   it considers while trimming.
 
+### Security
+- **A read-only command no longer starts a source a repository declares.** `--list-tools`,
+  `tools list`, and `tools doctor` used to build every source, and building a `local` /
+  `mcp-stdio` / `mcp-http` source starts a program or sends a request — so `git clone &&
+  rsagent --list-tools` ran whatever the checked-out `rsagent.toml` declared, before any
+  approval. These commands now describe such a source from its configuration alone and report
+  its health as `SourceHealth::NotChecked` (a new variant; `SourceHealth` is `#[non_exhaustive]`,
+  so existing matchers are unaffected). `builtin` / `skill` / `web` sources touch nothing when
+  built, so they are still assembled and their tools listed. A source's required field (a
+  `local` / `mcp-stdio` `command`, an `mcp-http` `url`) is still validated, so `doctor` remains
+  a CI gate for configuration errors — it just no longer probes reachability. A real run still
+  assembles every source as before.
+
 ## [0.1.0] - 2026-11-18
 
 The first version: a minimal, extensible Rust coding agent.

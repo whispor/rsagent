@@ -42,7 +42,7 @@ pub(crate) enum Command {
 pub(crate) enum ToolsAction {
     /// List every source, its health, and the tools it offers.
     List,
-    /// Probe each source and report problems with a suggested fix.
+    /// Check each source's configuration and report problems with a suggested fix.
     Doctor,
     /// Add a source to `rsagent.toml`.
     Add(AddArgs),
@@ -114,7 +114,10 @@ pub(crate) async fn run(command: &Command, cli: &Cli, palette: Palette) -> anyho
 async fn run_tools(action: &ToolsAction, cli: &Cli, palette: Palette) -> anyhow::Result<()> {
     match action {
         ToolsAction::List => {
-            let catalog = crate::build_catalog(cli, palette).await?;
+            // Read-only: list the declared sources and the assembled tools without
+            // starting an untrusted `local` / `mcp-stdio` / `mcp-http` source.
+            let catalog =
+                crate::build_catalog(cli, palette, crate::SourceMode::DeclaredOnly).await?;
             // Seed before printing so a cooling-down source shows as unhealthy (§3.5).
             let store = BreakerStore::load(&cli.cwd);
             store.seed(catalog.entries());
@@ -217,7 +220,10 @@ async fn doctor(cli: &Cli, palette: Palette) -> anyhow::Result<()> {
     }
 
     for spec in &config.tools.sources {
-        match crate::build_source(cli, spec, palette).await {
+        // Read-only: `doctor` must not start a program or send a request from a config it
+        // has not been told to trust. A source that is never started reports
+        // `NotChecked` and is not counted as a problem (else the gate would always be red).
+        match crate::build_source(cli, spec, palette, crate::SourceMode::DeclaredOnly).await {
             Ok(source) => {
                 store.seed_source(source.as_ref());
                 problems += usize::from(!report(source.as_ref(), palette));
@@ -243,21 +249,32 @@ fn doctor_result(problems: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Print one healthy source line; return whether the source is healthy.
+/// Print one source line; return whether the source is OK (i.e. not a problem).
 fn report(source: &dyn ToolSource, palette: Palette) -> bool {
-    let (health, healthy) = match source.health() {
-        SourceHealth::Healthy => (palette.green("正常"), true),
-        SourceHealth::Unhealthy(reason) => (palette.yellow(&format!("异常（{reason}）")), false),
+    // A not-checked source was never started, so its tool count is *unknown*, not zero —
+    // printing `0 个工具` would mislead, so the count is omitted for it.
+    let (show_count, health, healthy) = match source.health() {
+        SourceHealth::Healthy => (true, palette.green("正常"), true),
+        SourceHealth::Unhealthy(reason) => {
+            (true, palette.yellow(&format!("异常（{reason}）")), false)
+        }
+        // Read-only mode: nothing is known to be wrong, so this is not a problem (else the
+        // doctor gate would be red for every `local` / MCP source on every run).
+        SourceHealth::NotChecked => (false, palette.dim("未检查（只读模式）"), true),
         // `SourceHealth` is `#[non_exhaustive]`: a future variant must not break this,
         // and an unknown health is treated as a problem rather than a pass.
-        _ => (palette.yellow("未知"), false),
+        _ => (true, palette.yellow("未知"), false),
+    };
+    let tools = if show_count {
+        format!("{} 个工具 · ", source.tools().len())
+    } else {
+        String::new()
     };
     println!(
-        "{} {} [{}] {} 个工具 · {health}",
+        "{} {} [{}] {tools}{health}",
         palette.green("✓"),
         source.id(),
-        source.kind().as_str(),
-        source.tools().len()
+        source.kind().as_str()
     );
     healthy
 }
@@ -322,7 +339,7 @@ async fn prepare_after_add(cli: &Cli, rendered: &str, id: &str, palette: Palette
     let Some(spec) = config.tools.sources.iter().find(|spec| spec.id == id) else {
         return;
     };
-    match crate::build_source(cli, spec, palette).await {
+    match crate::build_source(cli, spec, palette, crate::SourceMode::Assemble).await {
         Ok(source) => match source.install() {
             Ok(()) => println!("  · 已准备就绪"),
             Err(error) => println!(
@@ -369,7 +386,9 @@ async fn remove(cli: &Cli, id: &str, palette: Palette) -> anyhow::Result<()> {
 
     if let Ok(config) = Config::parse(&text) {
         if let Some(spec) = config.tools.sources.iter().find(|spec| spec.id == id) {
-            if let Ok(source) = crate::build_source(cli, spec, palette).await {
+            if let Ok(source) =
+                crate::build_source(cli, spec, palette, crate::SourceMode::Assemble).await
+            {
                 if let Err(error) = source.uninstall() {
                     println!(
                         "{}",

@@ -633,6 +633,142 @@ fn write_local_config(dir: &std::path::Path) {
     .expect("write rsagent.toml");
 }
 
+/// Write a program that drops a `touched.txt` on *any* invocation, and answers `--describe`.
+///
+/// The marker lets a test prove a read-only command never ran the program: the old code
+/// ran `command --describe` during assembly, so the file would appear. Returns the
+/// `(program, args)` for `rsagent.toml`, using paths relative to `dir` so the configuration
+/// needs no escaping on Windows.
+fn describe_and_touch_tool(dir: &std::path::Path) -> (String, Vec<String>) {
+    let json = concat!(
+        r#"{"protocol":1,"tools":[{"name":"ping","description":"Ping.","#,
+        r#""parameters":{"type":"object","properties":{}}}]}"#
+    );
+    if cfg!(windows) {
+        std::fs::write(
+            dir.join("touch.cmd"),
+            format!(
+                "@echo off\r\necho x> touched.txt\r\nif \"%~1\"==\"--describe\" echo {json}\r\n"
+            ),
+        )
+        .expect("write touch.cmd");
+        (
+            "cmd".to_string(),
+            vec!["/C".to_string(), "touch.cmd".to_string()],
+        )
+    } else {
+        std::fs::write(
+            dir.join("touch.sh"),
+            format!(
+                "#!/bin/sh\ntouch touched.txt\n[ \"$1\" = \"--describe\" ] && printf '%s\\n' '{json}'\n"
+            ),
+        )
+        .expect("write touch.sh");
+        ("sh".to_string(), vec!["touch.sh".to_string()])
+    }
+}
+
+/// The three read-only commands, as argument vectors.
+fn read_only_invocations() -> [Vec<&'static str>; 3] {
+    [
+        vec!["--list-tools"],
+        vec!["tools", "list"],
+        vec!["tools", "doctor"],
+    ]
+}
+
+#[test]
+fn read_only_commands_never_start_a_local_source() {
+    let dir = temp_dir("read-only-local");
+    let (program, args) = describe_and_touch_tool(&dir);
+    let args = args
+        .iter()
+        .map(|arg| format!("\"{arg}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        format!(
+            "[[tools.sources]]\nkind = \"local\"\nid = \"demo\"\ncommand = \"{program}\"\nargs = [{args}]\n"
+        ),
+    )
+    .expect("write rsagent.toml");
+
+    let marker = dir.join("touched.txt");
+    for invocation in read_only_invocations() {
+        let _ = std::fs::remove_file(&marker);
+        let output = rsagent()
+            .current_dir(&dir)
+            .args(&invocation)
+            .output()
+            .expect("run rsagent");
+        let label = invocation.join(" ");
+        assert!(
+            !marker.exists(),
+            "`rsagent {label}` must not run the local source's command"
+        );
+        assert!(
+            output.status.success(),
+            "`rsagent {label}` should still succeed: {:?}",
+            output.status
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("demo") && stdout.contains("[local]"),
+            "`rsagent {label}` must still report the declared source: {stdout}"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn read_only_mode_still_assembles_the_sources_that_start_nothing() {
+    // builtin / skill / web never reach outside the process when built, so a read-only
+    // command must still list their tools — only local / mcp-stdio / mcp-http are withheld.
+    let dir = temp_dir("read-only-assemble");
+    let skill = dir.join("team");
+    std::fs::create_dir_all(&skill).expect("create the skill dir");
+    std::fs::write(skill.join("SKILL.md"), "# A test skill\n").expect("write SKILL.md");
+    let script = if cfg!(windows) { "run.cmd" } else { "run.sh" };
+    std::fs::write(skill.join(script), "exit 0\n").expect("write the script");
+    std::fs::write(
+        skill.join("skill.toml"),
+        format!("[[tool]]\nname = \"lint\"\ndescription = \"Lint.\"\ncommand = \"{script}\"\n"),
+    )
+    .expect("write skill.toml");
+    std::fs::write(
+        dir.join("rsagent.toml"),
+        "[[tools.sources]]\nkind = \"builtin\"\nid = \"core\"\n\
+         [[tools.sources]]\nkind = \"skill\"\nid = \"team\"\npath = \"team\"\nprefix = \"team\"\n\
+         [[tools.sources]]\nkind = \"web\"\nid = \"weather\"\nurl = \"https://api.example.com/weather\"\nname = \"get_weather\"\nprefix = \"wx\"\n",
+    )
+    .expect("write rsagent.toml");
+
+    let output = rsagent()
+        .current_dir(&dir)
+        .arg("--list-tools")
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let tools = listed_tools(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        tools.contains(&"read_file".to_string()),
+        "builtin tools must still be listed: {tools:?}"
+    );
+    assert!(
+        tools.contains(&"team__lint".to_string()),
+        "skill tools must still be listed: {tools:?}"
+    );
+    assert!(
+        tools.contains(&"wx__get_weather".to_string()),
+        "web tools must still be listed: {tools:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn rsagent_toml_narrows_the_builtin_source() {
     let dir = temp_dir("config-builtin");
@@ -716,7 +852,7 @@ fn a_broken_config_is_reported_and_the_run_continues() {
 }
 
 #[test]
-fn a_config_driven_local_source_is_listed() {
+fn a_config_driven_local_source_is_listed_but_not_started() {
     let dir = temp_dir("config-local");
     write_local_config(&dir);
 
@@ -736,9 +872,15 @@ fn a_config_driven_local_source_is_listed() {
         stdout.contains("[local]"),
         "the source kind is missing: {stdout}"
     );
+    // `--list-tools` is read-only: it must not run `--describe`, so the tool names are
+    // unknown and the source is reported as not checked rather than with its tools.
     assert!(
-        listed_tools(&stdout).contains(&"ping".to_string()),
-        "the local tool is missing: {stdout}"
+        stdout.contains("未检查（只读模式）"),
+        "the read-only notice is missing: {stdout}"
+    );
+    assert!(
+        !listed_tools(&stdout).contains(&"ping".to_string()),
+        "a read-only listing must not start the local source: {stdout}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -764,9 +906,7 @@ fn mcp_echo_program() -> Option<std::path::PathBuf> {
 }
 
 #[test]
-fn a_config_driven_mcp_stdio_source_is_listed() {
-    // Not a silent skip: a missing example is a real gap, and a plain `cargo test` builds
-    // the examples, so this only trips when someone ran a filtered target without them.
+fn a_config_driven_mcp_stdio_source_is_listed_but_not_started() {
     let program = mcp_echo_program()
         .expect("the `mcp_echo` example must be built first; run `cargo build --examples`");
     let dir = temp_dir("config-mcp");
@@ -792,9 +932,14 @@ fn a_config_driven_mcp_stdio_source_is_listed() {
         stdout.contains("[mcp-stdio]"),
         "the source kind is missing: {stdout}"
     );
+    // Read-only: the server is never spawned, so its tool list is unknown, not listed.
     assert!(
-        listed_tools(&stdout).contains(&"echo__echo".to_string()),
-        "the prefixed MCP tool is missing: {stdout}"
+        stdout.contains("未检查（只读模式）"),
+        "the read-only notice is missing: {stdout}"
+    );
+    assert!(
+        !listed_tools(&stdout).contains(&"echo__echo".to_string()),
+        "a read-only listing must not spawn the MCP server: {stdout}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -873,9 +1018,11 @@ fn a_config_driven_web_source_is_listed() {
 }
 
 #[test]
-fn an_unreachable_mcp_http_source_is_reported_and_skipped() {
+fn an_unreachable_mcp_http_source_is_not_contacted_by_a_read_only_listing() {
     let dir = temp_dir("config-mcp-http");
-    // Port 1 on loopback is never listening, so the handshake fails at load time.
+    // Port 1 on loopback is never listening. A real run would try to reach it, fail, and
+    // skip the source (see `an_unknown_source_kind_is_reported_and_skipped` for that path);
+    // a read-only listing must not even try, so the source is reported as declared.
     std::fs::write(
         dir.join("rsagent.toml"),
         "[[tools.sources]]\nkind = \"mcp-http\"\nid = \"remote\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
@@ -889,10 +1036,19 @@ fn an_unreachable_mcp_http_source_is_reported_and_skipped() {
         .expect("run rsagent");
 
     assert!(output.status.success(), "exit status: {:?}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("remote") && stdout.contains("[mcp-http]"),
+        "the declared source must still be listed: {stdout}"
+    );
+    assert!(
+        stdout.contains("未检查（只读模式）"),
+        "a read-only listing must report it as not checked: {stdout}"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("skipping tool source `remote`"),
-        "the unreachable source must be reported and skipped: {stderr}"
+        !stderr.contains("skipping tool source `remote`"),
+        "a read-only listing must not contact the source: {stderr}"
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -1406,12 +1562,14 @@ fn tools_doctor_reports_a_healthy_builtin() {
 
 #[test]
 fn tools_doctor_fails_on_an_unloadable_source() {
-    // `doctor` is usable as a CI gate: an unloadable source makes it exit non-zero and
-    // prints a kind-specific fix hint.
+    // `doctor` is usable as a CI gate: a source it cannot load makes it exit non-zero and
+    // prints a kind-specific fix hint. It validates the *configuration*, not reachability —
+    // it never starts a program (C1), so a `local` command that merely fails to run is
+    // reported as not checked, while a missing required field is still a hard failure.
     let dir = temp_dir("tools-doctor-bad");
     std::fs::write(
         dir.join("rsagent.toml"),
-        "[[tools.sources]]\nkind = \"local\"\nid = \"broken\"\ncommand = \"rsagent-no-such-program-xyz\"\n",
+        "[[tools.sources]]\nkind = \"local\"\nid = \"broken\"\n",
     )
     .expect("write rsagent.toml");
 

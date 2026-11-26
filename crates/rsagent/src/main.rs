@@ -25,8 +25,8 @@ use futures::future::FutureExt;
 use rsagent_agent::{
     Agent, AgentError, AgentEvent, Approver, BuiltinSource, HealthProbe, LocalSource,
     McpHttpSource, McpStdioSource, Memory, PathFence, Permission, SkillSource, SourceEntry,
-    SourceHealth, SourceKind, Tool, ToolCatalog, UnhealthySource, WebSource, WebSourceConfig,
-    DEFAULT_MEMORY_CAP,
+    SourceHealth, SourceKind, Tool, ToolCatalog, ToolSource, UnhealthySource, WebSource,
+    WebSourceConfig, DEFAULT_MEMORY_CAP,
 };
 use rsagent_ai::{
     AnthropicProvider, FauxBlock, FauxProvider, FauxResponse, Model, Models, OpenAiProvider,
@@ -247,8 +247,7 @@ async fn main() -> anyhow::Result<()> {
     // A subcommand runs first: it never needs a model or a provider.
     if let Some(command) = &cli.command {
         if let Err(error) = tools::run(command, &cli, palette).await {
-            eprintln!("{}", palette.red(&format!("· {error}")));
-            std::process::exit(2);
+            fail(palette, &error);
         }
         return Ok(());
     }
@@ -268,14 +267,14 @@ async fn main() -> anyhow::Result<()> {
     // so a bad path fails fast rather than after a run has started.
     let mut log = open_event_log(&cli, palette);
 
-    // Assemble the tool set once, from `rsagent.toml` plus CLI flags, so `--list-tools`
-    // and the agent see exactly the same catalog.
-    let catalog = match build_catalog(&cli, palette).await {
+    let source_mode = if cli.list_tools {
+        SourceMode::DeclaredOnly
+    } else {
+        SourceMode::Assemble
+    };
+    let catalog = match build_catalog(&cli, palette, source_mode).await {
         Ok(catalog) => catalog,
-        Err(error) => {
-            eprintln!("{}", palette.red(&format!("· {error}")));
-            std::process::exit(2);
-        }
+        Err(error) => fail(palette, &error),
     };
 
     // Seed persisted circuit-breaker state before any source does work, so a source that
@@ -368,6 +367,14 @@ async fn main() -> anyhow::Result<()> {
     .await;
     save_breakers(&mut breakers, &sources, palette);
     result
+}
+
+/// Report a startup error in red and exit with code 2 — the same code a failed subcommand
+/// uses. Startup failures (a bad subcommand, an unbuildable tool catalog) are user errors,
+/// not crashes: they are printed on stderr and end the process without a backtrace.
+fn fail(palette: Palette, error: &dyn std::fmt::Display) -> ! {
+    eprintln!("{}", palette.red(&format!("· {error}")));
+    std::process::exit(2);
 }
 
 /// Whether an error is a model-level failure — one the renderer has already reported as an
@@ -795,11 +802,69 @@ fn read_project_instructions(start: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// Whether a source should actually be assembled, or only described from its configuration.
+///
+/// A project `rsagent.toml` is untrusted input: a `local` / `mcp-stdio` / `mcp-http` source
+/// starts a program or sends a request the moment it is *built*. The read-only commands
+/// (`--list-tools`, `tools list`, `tools doctor`) must not do that, so they build in
+/// [`DeclaredOnly`](SourceMode::DeclaredOnly) mode.
+///
+/// A two-variant enum rather than a `bool`, on purpose: `AGENTS.md` forbids boolean
+/// parameters (`clippy.toml` sets `max-fn-params-bools = 0`).
+#[derive(Clone, Copy)]
+pub(crate) enum SourceMode {
+    /// Build the source for real — a `local` / `mcp-stdio` / `mcp-http` source is started.
+    Assemble,
+    /// Never touch the outside world: those three kinds are described, not started.
+    DeclaredOnly,
+}
+
+/// A source reported from configuration without being started.
+///
+/// Used in [`SourceMode::DeclaredOnly`] for the kinds whose constructor reaches outside the
+/// process. Its tool list is empty because those names are only knowable by running the
+/// source (`--describe` / `tools/list`), which a read-only command must not do — so it
+/// reports its kind and [`SourceHealth::NotChecked`], and nothing else.
+struct DeclaredSource {
+    id: String,
+    kind: SourceKind,
+}
+
+impl ToolSource for DeclaredSource {
+    fn kind(&self) -> SourceKind {
+        self.kind
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn tools(&self) -> Vec<Box<dyn Tool>> {
+        Vec::new()
+    }
+
+    fn health(&self) -> SourceHealth {
+        SourceHealth::NotChecked
+    }
+}
+
+/// Wrap a config entry as a declared-only source (see [`SourceMode::DeclaredOnly`]).
+fn declared(spec: &SourceConfig, kind: SourceKind) -> Box<dyn ToolSource> {
+    Box::new(DeclaredSource {
+        id: spec.id.clone(),
+        kind,
+    })
+}
+
 /// Build the tool sources from `rsagent.toml` and the CLI flags, then assemble them.
 ///
 /// A source that cannot be prepared is reported and skipped: one broken source must not
 /// take the whole agent down (`docs/EXTENSIBILITY.md` §3.5).
-async fn build_catalog(cli: &Cli, palette: Palette) -> anyhow::Result<ToolCatalog> {
+async fn build_catalog(
+    cli: &Cli,
+    palette: Palette,
+    mode: SourceMode,
+) -> anyhow::Result<ToolCatalog> {
     // Layer the user-level file under the project file (project wins by source id).
     let layered = load_layered(&cli.cwd);
     for warning in &layered.warnings {
@@ -821,7 +886,7 @@ async fn build_catalog(cli: &Cli, palette: Palette) -> anyhow::Result<ToolCatalo
         ))));
     } else {
         for spec in &config.tools.sources {
-            match build_source(cli, spec, palette).await {
+            match build_source(cli, spec, palette, mode).await {
                 Ok(source) => {
                     entries.push(match &spec.prefix {
                         Some(prefix) => SourceEntry::with_prefix(source, prefix.clone()),
@@ -868,6 +933,7 @@ async fn build_source(
     cli: &Cli,
     spec: &SourceConfig,
     palette: Palette,
+    mode: SourceMode,
 ) -> Result<Box<dyn rsagent_agent::ToolSource>, String> {
     // Resolve the kind through the enum, so the accepted names live in exactly one place
     // (`SourceKind::ALL`) instead of being repeated as string literals here.
@@ -877,11 +943,18 @@ async fn build_source(
 
     match kind {
         SourceKind::Builtin => Ok(Box::new(builtin_source(cli, Some(spec), palette))),
+        // The next three kinds reach outside the process when built. In `DeclaredOnly` mode
+        // (a read-only command) they are described instead of started — but their required
+        // field is still validated first, because a missing `command`/`url` is knowable from
+        // the config alone and `doctor` exists to catch exactly that.
         SourceKind::Local => {
             let command = spec
                 .command
                 .as_deref()
                 .ok_or_else(|| "a `local` source needs `command`".to_string())?;
+            if let SourceMode::DeclaredOnly = mode {
+                return Ok(declared(spec, kind));
+            }
             let timeout = spec.timeout_secs.map(Duration::from_secs);
             let source =
                 LocalSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
@@ -892,6 +965,9 @@ async fn build_source(
                 .command
                 .as_deref()
                 .ok_or_else(|| "an `mcp-stdio` source needs `command`".to_string())?;
+            if let SourceMode::DeclaredOnly = mode {
+                return Ok(declared(spec, kind));
+            }
             let timeout = spec.timeout_secs.map(Duration::from_secs);
             let source =
                 McpStdioSource::new(spec.id.clone(), command, spec.args.clone(), timeout).await?;
@@ -902,6 +978,9 @@ async fn build_source(
                 .url
                 .as_deref()
                 .ok_or_else(|| "an `mcp-http` source needs `url`".to_string())?;
+            if let SourceMode::DeclaredOnly = mode {
+                return Ok(declared(spec, kind));
+            }
             let headers = spec
                 .headers
                 .clone()
@@ -998,6 +1077,7 @@ fn print_catalog(catalog: &ToolCatalog, palette: Palette) {
         let health = match source.health() {
             SourceHealth::Healthy => palette.green("正常"),
             SourceHealth::Unhealthy(reason) => palette.yellow(&format!("异常（{reason}）")),
+            SourceHealth::NotChecked => palette.dim("未检查（只读模式）"),
             // `SourceHealth` is `#[non_exhaustive]`: a future variant must not break this.
             _ => palette.yellow("未知"),
         };

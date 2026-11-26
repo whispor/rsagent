@@ -76,6 +76,13 @@ pub enum SourceHealth {
     Healthy,
     /// Unusable right now, with a reason for `doctor` to print.
     Unhealthy(String),
+    /// Not determined — the source was described from configuration but never started.
+    ///
+    /// Read-only commands (`--list-tools`, `tools list`, `tools doctor`) never spawn a
+    /// program or send a request, so a `local` / `mcp-stdio` / `mcp-http` source is
+    /// reported without being probed. This is deliberately **not**
+    /// [`Unhealthy`](Self::Unhealthy): nothing is known to be wrong.
+    NotChecked,
 }
 
 /// A source that a health probe currently considers unhealthy.
