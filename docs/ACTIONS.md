@@ -23,6 +23,12 @@
 | `cargo test --workspace --locked` | ✅ **297 通过 / 0 失败**（@ `fe411cf`，工作区干净） |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | ✅ 0 告警 |
 
+> **本表是 `fe411cf` 上的实测结果。** 2026-11-26 的 G1 修复（`bb94eb4`）**只改 `AGENTS.md`**，
+> 代码基线未动，故**未重跑四道门禁**——同一提交的结果仍然成立（§5 双基线）。
+> **但按修正后的规则另跑了文档相关测试**：`cargo test --locked -p rsagent --test docs`
+> → ✅ **2 passed / 0 failed**（`every_relative_markdown_link_resolves`、
+> `the_public_api_table_matches_the_crate_roots`）。**文档改动也能让测试变红**，故不能一条都不跑。
+
 **已修复（评审方逐条核实）**：
 
 - **H1–H7 + M16/M17**（9 条）：`3b22d5f`、`e939f87`、`c8f6351`、`73fb63b`。
@@ -39,9 +45,12 @@
 - **🆕 安全修复**：`24106d4` 把 `url` 2.5.8 → 2.5.9，修 RUSTSEC-2026-0592
   （见下方里程碑六）。
 - **C1 + C2 + F1 + F2**：`d632905`、`9ca215a`、`0a4ed7b`、`fe411cf`。测试数 289 → **297**。
-- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2 全部完成——队列清空。**
+- **G1**：`bb94eb4`（**只改 `AGENTS.md`**；代码基线未变，故本轮**未重跑门禁**——见 §5 双基线）。
+- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1 全部完成——队列清空。**
+- **🆕 仍未完成**：**G2**（`AGENTS.md` 规则 2 的全称断言，约 10 分钟，**建议只改措辞不改代码**），
+  以及 `--cwd` / `--verbose` 的 E2E 覆盖。
 
-**综合评分 9.96 → 9.98 / 10**（六维审核发现的两条缺口与最后两条决策项全部落地）。
+**综合评分 9.98 / 10**（G1 已修复并核实；G2 是低优先级措辞项，**不足以扣分**）。
 
 **护栏复核**：无新增依赖声明、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
 无无关重构。✅
@@ -768,6 +777,29 @@
 
   **理由**：CI workflow 是「项目怎么被验证」的定义，`deny.toml` 是依赖安全策略——它们与
   `crates/` 同等重要，只是恰好不在 `crates/` 下。评审方本轮差点因此漏审 D4。
+- **⚠️ 基线还必须涵盖「契约文档」——改用双基线**（2026-11-26 修正，**第二次修正基线口径**）：
+  上面那条修正后，基线仍是 `crates/ .github/ deny.toml`，**看不见只改文档的修复**。
+  **G1 正是实例**：它是关于 `AGENTS.md` 的发现，修复提交 `bb94eb4` 也只改 `AGENTS.md`——
+  **代码基线一动不动**。若按本条下面「基线相同就不改文档」的字面规则，这一轮会
+  **直接跳过对 G1 的核实**，而 G1 当时**正是唯一未完成项**。
+
+  | 基线 | 命令 | 变了做什么 |
+  | --- | --- | --- |
+  | **代码基线** | `git log -1 --format=%h -- crates/ .github/ deny.toml` | 全量复评（**含四道门禁**） |
+  | **契约文档基线** | `git log -1 --format=%h -- AGENTS.md README.md STABILITY.md CHANGELOG.md docs/EXTENSIBILITY.md docs/ARCHITECTURE.md` | **仅文档复评**：逐条回读被改的承诺；**不重跑四道门禁**，但**必须跑 `cargo test -p rsagent --test docs`**（理由见下） |
+
+  **理由（这条比上一条更要紧）**：本项目价值最高的一类缺陷是「**文档承诺与实际不符**」
+  （A1 / A5 / D7 / D8 / D9 / E5 / E6 / E7 / G1 / G2），而**这类缺陷的修复恰恰最可能只改文档**。
+  用一个**看不见文档**的基线去检测它，是自相矛盾的——**检测器对它所检测的对象是盲的**。
+
+  > **⚠️ 但「文档改动不用跑测试」是错的——本次修正当场就验证了这一点。**
+  > `crates/rsagent/tests/docs.rs:80` 的 `every_relative_markdown_link_resolves()`
+  > **会遍历仓库根下每一个 markdown 文件**（`markdown_files(root)`），
+  > 另一条 `the_public_api_table_matches_the_crate_roots()` 读 `STABILITY.md`。
+  > 也就是说：**改文档同样能让测试变红。**
+  > 因此文档复评的**最低测试集**是 `cargo test --locked -p rsagent --test docs`（约 10 秒），
+  > 而不是「一条都不跑」。其余三道门禁（fmt / clippy / doc）不读 markdown，可安全跳过。
+
 - **不重复空跑**：若本次 `HEAD` 与**上一次检查时的 HEAD 完全相同**（不只是代码基线相同），
   则上一次的测试结果对同一提交仍然成立，**不必重跑**——只需确认工作区干净并汇报即可。
   同一提交上反复跑同一套测试不产生任何新信息。（2026-11-19 20:19–21:19 连续三轮
@@ -819,13 +851,50 @@
 | 2026-11-20 | `a27c91c` | 279 | **9.97** | **D4 已完成并核实**（`a27c91c`，只改 CI + 新增 `deny.toml`）：六项 CI 加固全部落地；**远端 7/7 job 全绿**；评审方修正了会漏审 CI-only 改动的基线规则 |
 | 2026-11-24 | `0f6c562` | 289 | **9.99** | **E1–E7 + D5 已完成并核实**（8 项）：测试 279 → 289；**`audit` job 抓到并修掉 RUSTSEC-2026-0592**（`url` 栈溢出可 abort 进程）；E7 执行方有理有据地否定了评审方的推荐 |
 | 2026-11-26 | `fe411cf` | 297 | **9.98** | **C1+C2+F1+F2 已完成并核实**（4 项）：测试 289 → 297；**队列清空**；六维质量审核新增 §11；**新增规范自查发现 G1**（AGENTS.md 规则 2 的「only」与代码不符） |
+| 2026-11-26 | `fe411cf`（代码基线**未变**，仅 `AGENTS.md` 变） | 297（未重跑） | **9.98** | **G1 已修复并核实**（`bb94eb4`，采用方案 (a)，措辞与代码逐处对上）；**新增 G2**（规则 2 的普适断言仍有一处例外：`HealthProbe`）；**评审流程修正为双基线**（见 §5）——本轮正因旧基线看不见 `AGENTS.md` 才差点漏掉 G1 |
 
 > **基线口径**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
 > 查代码基线：`git log -1 --format=%h -- crates/ .github/ deny.toml`。
 > **不要只用 `crates/`**——D4 只改了 CI，旧口径会误判为「无代码改动」。
 > 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入。
 
-### 本轮（`fe411cf`）复评记录
+### 本轮（`fe411cf` · 代码基线未变，仅 `AGENTS.md` 变动）复评记录
+
+**代码基线未变**（`fe411cf`），本轮的改动**只有 `AGENTS.md`**（`bb94eb4`）。按 §5 新增的
+**双基线**口径，这一轮做**文档复评**，**不重跑四道门禁**（`crates/` 未动，297 通过的结果仍成立），
+但**另跑了文档相关测试**：`cargo test --locked -p rsagent --test docs` → ✅ **2 passed / 0 failed**。
+
+> **⚠️ 这条「但书」是当场补上的**：评审方起初把规则写成「文档改动不跑任何测试」，
+> 随即发现 `crates/rsagent/tests/docs.rs:80` 的 `every_relative_markdown_link_resolves()`
+> **会遍历仓库根下每个 markdown 文件**——**改文档同样能让测试变红**。
+> 于是规则补成「跳过 fmt/clippy/doc，但**必须**跑 `--test docs`」。**新规则自己在几分钟内被验伪了一次。**
+
+**✅ G1 已修复并核实 —— 采用方案 (a)，逐处对上：**
+
+- **措辞改动**（`bb94eb4`，`AGENTS.md` 规则 2）：
+
+  > 原：`In this tree Arc appears only where sharing is real: the cancel flag (cancel.rs), the per-source circuit breaker, and the optional memory store.`
+  > 新：`Where Arc does appear, the sharing is real — for example the cancel flag (cancel.rs), the per-source circuit breaker, the optional memory store, the provider registry (provider.rs), and the subprocess drain buffer (sources/subprocess.rs, shared by two spawned tasks and the parent).`
+
+- **封闭性去掉了**（`only` → `for example`），且**我点名的两处缺项都补上了**
+  （`provider.rs` 注册表、`subprocess.rs` 排空缓冲）——**正是推荐的方案 (a)**。
+- **评审方逐处回读代码，文中五个例子全部命中**：`cancel.rs:13,14`；五个来源各自的
+  `breaker` 字段（`local.rs:55`、`web.rs:113`、`skill.rs:108`、`mcp_http.rs:379`、
+  `mcp_stdio.rs:376`）；`agent.rs:98` + `tool.rs:38`；`provider.rs:133,155`；
+  `subprocess.rs:148`。
+- 执行方另**独立做了全树 `Arc<` 扫描**（自称「30+ 处，全部为真实共享」）。评审方复扫：
+  **非测试共 33 处**，**数量属实**；其中 **32 处确为真实共享，1 处存疑** → 即 G2。
+
+**🆕 G2（本轮新发现，低优先级、可争议）**：见 §8.6。
+
+**⚠️ 流程修正——本轮最重要的一条，比 G1/G2 本身更要紧**：评审方自己的基线口径
+`crates/ .github/ deny.toml` **看不见 `AGENTS.md`**，而 G1 的修复恰好只改 `AGENTS.md`。
+**若照旧规则字面执行，本轮会报告「基线未变 → 不改文档」，
+从而跳过当时唯一的未完成项，且永远不会有人发现。**
+已改为**双基线**（见 §5）。这是本项目**第二次修正基线口径**
+（第一次是 D4 的 CI-only 改动）——两次都是**检测器对它所检测的对象是盲的**。
+
+### 上一轮（`fe411cf`）复评记录
 
 **核实结论：C1 / C2 / F1 / F2 四项全部完成并核实；队列清空。新增一条规范自查发现（G1）。**
 
@@ -2265,6 +2334,62 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 | **1 · Prefer newtypes** | 检查它引用的 `struct SessionId(String)` / `struct ToolName(String)` 是否存在 | ✅ **不构成缺陷**：原文写的是「**the shape being** …」，是**示意写法**而非引用现有类型。（两者确实不存在，但措辞已表明是形式示例。） |
 | **3 · Prefer channels over shared state** | 核对它引用的两处 | ✅ 成立：事件流是 `AgentEvent` 经 unbounded `mpsc`；CLI 输入是 `input.rs` 的句柄。 |
 | **4 · traits/enum，热循环免分配** | 核对它的**全部具体引用** | ✅ **全部存在**：`SourceMode::{Assemble, DeclaredOnly}`（`main.rs:815`，C1 刚加的）、`Permission`、`StopReason`、`Agent::run_turns`、四个 trait（`Tool`/`Provider`/`Approver`/`ToolSource`）。该条是**祈使句**（"avoid needless"），不是对现状的断言，故无可证伪之处。 |
+
+### G2 · 🆕 规则 2 的**普适断言**仍有一处例外：`HealthProbe`
+
+- **状态**：待决策（**评审方建议只改措辞、不改代码**） · **成本**：约 10 分钟 · **影响**：低
+- **背景**：G1 把「`Arc` 只出现在三处」改成了「Where `Arc` does appear, **the sharing is real**」。
+  封闭清单的问题解决了，但**后半句从「枚举不全」升级成了一个全称命题**——
+  它断言**全树的每一个 `Arc` 都对应真实共享**。
+- **实测（评审方扫全树 `Arc<`，非测试共 33 处）**：**32 处成立，1 处不成立。**
+- **唯一的例外**：`crates/rsagent-agent/src/agent.rs:30`
+
+  ```rust
+  pub type HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource> + Send + Sync>;
+  ```
+
+  它被 `clone()` 的**唯一地点**是 `agent.rs:853`：
+
+  ```rust
+  fn probe_health(&mut self) {
+      let Some(probe) = self.health_probe.clone() else { return; };
+  ```
+
+  这次 clone **既不跨线程、也不跨生命周期**——它只是为了**在改动 `self.reported_unhealthy`
+  并调用 `self.emit(..)` 之前，解开对 `self.health_probe` 的不可变借用**。
+  这正是规则 2 自己第一句话所反对的情形
+  （"Reach for shared ownership only when ownership genuinely crosses a thread or a lifetime"）。
+
+- **佐证（说明这不是吹毛求疵）**：
+  - `Agent` **没有 `derive`**（`agent.rs:85`；字段含 `Vec<Box<dyn Tool>>`，本就不可 `Clone`），
+    所以这个 `Arc` 不是为了克隆 `Agent`。
+  - 项目对**单所有权 trait object** 的一贯写法就是 `Box`：`agent.rs:90` 的
+    `tools: Vec<Box<dyn Tool>>`、`agent.rs:94` 的 `approver: Option<Box<dyn Approver>>`。
+    **`HealthProbe` 是全树唯一一处用 `Arc` 包单个 `dyn Fn` 的地方。**
+  - `probe_health` 完全可以不 clone：`let Some(probe) = self.health_probe.as_ref() else …`
+    之后 `let unhealthy = probe();`（返回**拥有所有权**的 `Vec`，借用到此结束），
+    再遍历 `unhealthy` 去改 `self`。`Box<dyn Fn() + Send + Sync>` 同样满足 `Agent: Send`。
+- **⚠️ 但评审方不建议改代码**：`HealthProbe` 是**公开 API**，`STABILITY.md:46` 明确把它列为
+  **Semver**。把 `Arc` 改成 `Box` 是**破坏性变更**，而收益仅是「少一次原子引用计数增减」。
+  **为一句文档措辞去付一次 major 版本，不划算。**
+- **推荐（二选一，推荐前者）**：
+  - **(a) 删掉那句全称断言，只留例子**——把「Where `Arc` does appear, **the sharing is real** —
+    for example X, Y, Z」改成「`Arc` is used for the cancel flag (`cancel.rs`), the per-source
+    circuit breaker, the optional memory store, the provider registry (`provider.rs`), and the
+    subprocess drain buffer (`sources/subprocess.rs`).」
+    **没有断言，就没有可被证伪的东西。**
+  - **(b) 保留断言但收窄**：改成「**These** are the places `Arc` earns its keep — …」，
+    把它从「全树普适」降为「以下这些」。
+- **关联——这条的通用教训比 G2 本身值钱**：
+  **不要把「全树现状」写进文档。** 本项目已因此栽了三次：
+  - **E5**：`ARCHITECTURE.md` 写死「230 tests」（实际 267）→ 已改为**删掉数字**。
+  - **G1**：`AGENTS.md` 写死「`Arc` 只在这三处」→ 已改为「for example」。
+  - **G2**：`AGENTS.md` 的「the sharing is real」→ 同一个毛病的残留。
+
+  **规律：文档应陈述「规则」（不随时间变），而不是「清单 / 计数 / 全称断言」（必然腐烂）。**
+  写「用 `Arc` 要有真实共享的理由」是规则；写「`Arc` 只出现在这三处」是快照。
+  **前者永远不会错，后者一定会错。**
+- **验收**：`AGENTS.md` 规则 2 里不再有对**全树现状**的全称断言；五个例子仍逐处可查。
 
 ---
 
