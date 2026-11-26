@@ -410,12 +410,16 @@ impl Agent {
             }
             self.turn = self.turn.saturating_add(1);
             self.inject_steering();
-            self.compact_context();
+            // Render the memory-augmented prompt once for the whole turn, so the memory file
+            // is read once (not twice: once to measure, once to send) and the prompt that is
+            // measured is exactly the prompt that is sent (decision F2).
+            let system_prompt = self.system_prompt_with_memory();
+            self.compact_context(&system_prompt);
             self.probe_health();
 
             self.emit(&AgentEvent::TurnStart);
 
-            let assistant = match self.stream_turn().await? {
+            let assistant = match self.stream_turn(&system_prompt).await? {
                 StreamOutcome::Message(message) => message,
                 StreamOutcome::Cancelled => return Ok(()),
                 StreamOutcome::NoResult => return Err(AgentError::NoResult),
@@ -489,8 +493,8 @@ impl Agent {
     }
 
     /// Stream one model response, returning the final assistant message.
-    async fn stream_turn(&mut self) -> Result<StreamOutcome, AgentError> {
-        let context = self.build_context();
+    async fn stream_turn(&mut self, system_prompt: &str) -> Result<StreamOutcome, AgentError> {
+        let context = self.build_context(system_prompt);
         let mut stream = self
             .models
             .stream(&self.model, context, self.options.clone());
@@ -753,8 +757,10 @@ impl Agent {
     /// The first turn and the most recent turn are always kept — the original task and
     /// the latest exchange survive — while older middle turns are dropped oldest-first.
     /// Turns are dropped whole so a tool call is never separated from its result.
-    /// Returns how many messages were dropped.
-    fn compact_context(&mut self) -> usize {
+    /// `system_prompt` is the already-rendered prompt for this turn, so the budget check
+    /// measures exactly what will be sent (decision F2). Returns how many messages were
+    /// dropped.
+    fn compact_context(&mut self, system_prompt: &str) -> usize {
         let budget = self.context_budget();
         if budget == u64::MAX {
             return 0;
@@ -767,7 +773,7 @@ impl Agent {
         // Measure each message once. The trimming loop then only sums slices of these
         // counts, instead of re-serializing every message it considers.
         let counts: Vec<usize> = self.messages.iter().map(message_chars).collect();
-        let system_chars = self.system_prompt_with_memory().chars().count();
+        let system_chars = system_prompt.chars().count();
         let mut total = to_tokens(system_chars + counts.iter().sum::<usize>());
         if total <= budget {
             return 0;
@@ -886,9 +892,9 @@ impl Agent {
             .map(|&index| self.tools[index].as_ref())
     }
 
-    fn build_context(&self) -> Context {
+    fn build_context(&self, system_prompt: &str) -> Context {
         Context {
-            system_prompt: Some(self.system_prompt_with_memory()),
+            system_prompt: Some(system_prompt.to_string()),
             messages: self.messages.clone(),
             tools: self.tools.iter().map(|tool| tool.spec()).collect(),
         }
@@ -897,8 +903,11 @@ impl Agent {
     /// The system prompt for the next request: the base prompt plus the newest memory
     /// notes, when memory is enabled.
     ///
-    /// Re-read every turn, so a note recorded mid-run is visible to the following request.
-    /// With no memory — or none recorded yet — this is exactly the base prompt.
+    /// Rendered once per turn, before compaction (`run_turns`), so the memory file is read
+    /// once and the prompt that is measured is the prompt that is sent (decision F2). A note
+    /// recorded by this turn's distillation is therefore visible to the *following* turn's
+    /// request, not retroactively to this one. With no memory — or none recorded yet — this
+    /// is exactly the base prompt.
     fn system_prompt_with_memory(&self) -> String {
         let Some(memory) = &self.memory else {
             return self.system_prompt.clone();

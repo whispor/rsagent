@@ -1006,6 +1006,31 @@ impl Provider for CapturingProvider {
     }
 }
 
+/// A faux provider that records the system prompt of every request, in order, then replays
+/// the scripted responses. Used to observe how many times the memory is read per turn.
+struct RecordingFaux {
+    faux: FauxProvider,
+    prompts: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+impl Provider for RecordingFaux {
+    fn id(&self) -> &str {
+        self.faux.id()
+    }
+
+    fn models(&self) -> Vec<Model> {
+        self.faux.models()
+    }
+
+    fn stream(&self, model: Model, context: Context, options: StreamOptions) -> EventStream {
+        self.prompts
+            .lock()
+            .expect("prompt lock")
+            .push(context.system_prompt.clone());
+        self.faux.stream(model, context, options)
+    }
+}
+
 #[tokio::test]
 async fn memory_notes_are_folded_into_the_system_prompt() {
     let dir = temp_dir("memory-prompt-it");
@@ -1352,4 +1377,60 @@ async fn a_sequential_tool_is_not_run_in_parallel_with_others() {
         1,
         "a batch containing a sequential tool must run its calls one at a time"
     );
+}
+
+#[tokio::test]
+async fn a_turn_reads_memory_once() {
+    let dir = temp_dir("memory-read-once");
+    let memory = Arc::new(Memory::new(dir.join("notes.jsonl"), 50));
+    memory.append("seeded note").expect("append");
+
+    let faux = FauxProvider::new();
+    faux.set_responses(vec![
+        FauxResponse::tool_calls(vec![("read_file", json!({ "path": "Cargo.toml" }))]),
+        FauxResponse::text("done"),
+    ]);
+    let prompts = Arc::new(Mutex::new(Vec::new()));
+    let mut models = Models::new();
+    models.register(RecordingFaux {
+        faux: faux.clone(),
+        prompts: Arc::clone(&prompts),
+    });
+
+    // A tiny window with long seeded turns, so turn 1 compacts and distils a note.
+    let model = faux.model().with_context_window(40);
+    let mut agent = Agent::new(models, model, "system").with_memory(Arc::clone(&memory));
+    let long = "x".repeat(300);
+    agent.load_messages((0..5).map(|_| Message::user(long.clone())).collect());
+
+    agent.prompt("go").await.expect("prompt completes");
+
+    let notes = memory.recent(50).expect("read memory");
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.text.starts_with("[compacted]")),
+        "turn 1 distilled a note: {notes:?}"
+    );
+
+    let prompts = prompts.lock().expect("prompt lock");
+    assert!(prompts.len() >= 2, "the run made at least two requests");
+    let first = prompts[0].as_deref().expect("a system prompt");
+    let second = prompts[1].as_deref().expect("a system prompt");
+    assert!(
+        first.contains("seeded note"),
+        "the existing memory is folded in: {first}"
+    );
+    // Rendered once, before this turn's distill: the note just written is not yet in the
+    // prompt that was already built — so the file was read a single time this turn.
+    assert!(
+        !first.contains("[compacted]"),
+        "the prompt is rendered before the distill, from one read: {first}"
+    );
+    assert!(
+        second.contains("[compacted]"),
+        "the following turn re-renders and sees the new note: {second}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }

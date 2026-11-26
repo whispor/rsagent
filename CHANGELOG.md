@@ -127,6 +127,13 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   suppresses the note for five turns after one is written; the first compaction of a session
   still records, so nothing is silently lost from the start. Only the *frequency* changes —
   the note's content and the memory store's contract are untouched.
+- **The memory file is read once per turn, and the prompt measured is the prompt sent.** The
+  memory-augmented system prompt was rendered twice per turn — once to measure the context
+  budget, once to build the request — so the file was read twice and the budget was checked
+  against a slightly smaller prompt than the one actually sent. It is now rendered once, up
+  front, and the same string is both measured and sent. A consequence is that a note distilled
+  by a turn's compaction is visible to the *following* turn's request, not retroactively to the
+  one that dropped the turns.
 - **MCP replies are matched by direction, and `tools/list` pagination is bounded.** Both
   transports matched a response by `id` alone, but a server→client *request* also carries an
   `id`; a same-id request was taken as the answer and read as a silent empty success. A reply
