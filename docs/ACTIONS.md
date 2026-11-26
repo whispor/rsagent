@@ -20,7 +20,7 @@
 | --- | --- |
 | `cargo fmt --all --check` | ✅ 干净 |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | ✅ 0 警告 |
-| `cargo test --workspace --locked` | ✅ **289 通过 / 0 失败**（@ `0f6c562`，工作区干净） |
+| `cargo test --workspace --locked` | ✅ **297 通过 / 0 失败**（@ `fe411cf`，工作区干净） |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | ✅ 0 告警 |
 
 **已修复（评审方逐条核实）**：
@@ -38,13 +38,13 @@
   `0f6c562`。测试数 279 → **289**。
 - **🆕 安全修复**：`24106d4` 把 `url` 2.5.8 → 2.5.9，修 RUSTSEC-2026-0592
   （见下方里程碑六）。
-- **A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7 全部完成。** 队列中仅剩 **C1 + C2**（已决策待执行）。
+- **C1 + C2 + F1 + F2**：`d632905`、`9ca215a`、`0a4ed7b`、`fe411cf`。测试数 289 → **297**。
+- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2 全部完成——队列清空。**
 
-**综合评分 9.97 → 9.99 / 10**（E 组七项与 D5 全部落地，且**一项由 CI 审计 job 抓到的真实
-安全漏洞被及时修掉**）。
+**综合评分 9.96 → 9.98 / 10**（六维审核发现的两条缺口与最后两条决策项全部落地）。
 
-**护栏复核**：无新增依赖**声明**（`Cargo.lock` 仅 `url` 及其 `form_urlencoded` 版本前移）、
-无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、无无关重构。✅
+**护栏复核**：无新增依赖声明、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
+无无关重构。✅
 
 **🏁 里程碑一（已达成）**：「会静默给错结果」与「会永久卡住」两类缺陷已全部清空。
 
@@ -818,11 +818,36 @@
 | 2026-11-20 | `3270e5b` | 279 | **9.96** | **D3 已完成并核实**（`3270e5b`）：三个「因错误原因通过」的测试变成真会红的测试；测试与仓库根/开发机环境隔离（附 A/B 证明） |
 | 2026-11-20 | `a27c91c` | 279 | **9.97** | **D4 已完成并核实**（`a27c91c`，只改 CI + 新增 `deny.toml`）：六项 CI 加固全部落地；**远端 7/7 job 全绿**；评审方修正了会漏审 CI-only 改动的基线规则 |
 | 2026-11-24 | `0f6c562` | 289 | **9.99** | **E1–E7 + D5 已完成并核实**（8 项）：测试 279 → 289；**`audit` job 抓到并修掉 RUSTSEC-2026-0592**（`url` 栈溢出可 abort 进程）；E7 执行方有理有据地否定了评审方的推荐 |
+| 2026-11-26 | `fe411cf` | 297 | **9.98** | **C1+C2+F1+F2 已完成并核实**（4 项）：测试 289 → 297；**队列清空**；六维质量审核新增 §11；**新增规范自查发现 G1**（AGENTS.md 规则 2 的「only」与代码不符） |
 
 > **基线口径**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
 > 查代码基线：`git log -1 --format=%h -- crates/ .github/ deny.toml`。
 > **不要只用 `crates/`**——D4 只改了 CI，旧口径会误判为「无代码改动」。
 > 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入。
+
+### 本轮（`fe411cf`）复评记录
+
+**核实结论：C1 / C2 / F1 / F2 四项全部完成并核实；队列清空。新增一条规范自查发现（G1）。**
+
+| 项 | 提交 | 核实要点 |
+| --- | --- | --- |
+| C1 | `d632905` | 新增 `SourceHealth::NotChecked`（类型级区分）；`report()` 把它计为**健康**（不计问题）；**并额外省略工具数**——因为「工具数是未知而非 0」。模式用 `SourceMode` **enum** 而非 bool。 |
+| C2 | `9ca215a` | `DISTILL_QUIET_TURNS = 5` + 轮次计数；只加频率门，未动 D16 的存储约定。 |
+| F1 | `0a4ed7b` | 四个测试名与建议**逐一对应**，全部用 `faux` + 现有 harness，**无新依赖**。 |
+| F2 | `fe411cf` | 每回合只渲染一次 system prompt，以 `&str` 传下去——正是方案 (a)。 |
+
+**🆕 G1（本轮新发现）**：执行方把四条架构规则写进 `AGENTS.md`（`aeb5d8b`）。
+**新增规范本身就是一批「文档承诺」**，故逐条回读核实：**三条成立，规则 2 的「only」不成立**
+——`Arc` 除它列举的三处外还有至少四处（`provider.rs` 注册表、`subprocess.rs` 排空缓冲、
+`agent.rs` 的 `HealthProbe`、`faux.rs`），**且每处都是真实共享**。
+风险不在措辞：读者会以为「清单外出现 `Arc` 即违规」，最可能误伤 `subprocess.rs`
+那处**必需**的 `Arc<StdMutex<OutputBuffer>>`（两个 spawn 的排空任务与父级共享缓冲）。
+
+**护栏复核**：无新增依赖声明、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
+无无关重构。✅
+
+**🎉 队列状态**：A 5/5、B 5/5、D 9/9、E 7/7、C1+C2、F1+F2 **全部完成**。
+**仅新增 G1 一条**（10 分钟改措辞）。
 
 ### 本轮（`0f6c562`）复评记录
 
@@ -2157,6 +2182,73 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 - 文档同步：agent.rs 的 system_prompt_with_memory / compact_context 文档注释、
   CHANGELOG.md（Fixed）。
 ```
+
+---
+
+> **评审方核实（2026-11-26 14:00，已提交状态 `fe411cf`）——✅ C1 / C2 / F1 / F2 四项全部通过**
+>
+> | 项 | 提交 | 核实要点 |
+> | --- | --- | --- |
+> | **C1** | `d632905` | 新增 `SourceHealth::NotChecked` 变体（**类型级区分**，优于字符串），文档写明「刻意**不是** `Unhealthy`：没有已知问题」。`report()`（`tools.rs:253`）把 `NotChecked` 计为**健康**（不计为问题，避免只读命令恒红）✓。**并额外做对一件评审方没要求的事**：对未启动的来源**省略工具数**，注释写明「工具数是**未知**而非 0——打印『0 个工具』会误导」。模式用 **`SourceMode::{Assemble, DeclaredOnly}` enum**（`main.rs:815`），**不是 bool** ✓，符合 lint 与 AGENTS.md。 |
+> | **C2** | `9ca215a` | `DISTILL_QUIET_TURNS = 5` + `last_distill_turn` 计数 + `distill()` 在窗口内跳过写入。**只加频率门**，未动 `distill_messages` 与 `Memory` 存储约定（D16）✓。 |
+> | **F1** | `0a4ed7b` | 四个测试名与建议**逐一对应**：`steering_injects_a_message_mid_run`、`follow_up_keeps_the_run_going`、`aborting_a_run_ends_it_without_an_error`、`a_sequential_tool_is_not_run_in_parallel_with_others`。**全部用现有 `harness()` + `faux`，无新依赖**——证实了「abort 在库层可测」的判断。 |
+> | **F2** | `fe411cf` | `system_prompt_with_memory()` 改为**每回合调一次**，再以 `&str` 传给 `compact_context` 与 `stream_turn`/`build_context`——**正是建议的方案 (a)**，同时消除重复读与阻塞面，且未改任何公开签名 ✓。 |
+>
+> **C1 的额外亮点值得记录**：评审方只要求「未启动的来源报『未检查』且不计为问题」，
+> 执行方**进一步发现「报 0 个工具」本身也是误导**——因为工具数是未知而非零。
+> **这与本项目一贯在追的那类缺陷同源**（输出与事实不符），而且是执行方主动识别的新一例。
+>
+> 已提交状态实测 **297 通过 / 0 失败**。
+
+---
+
+## 8.6 G 组 · 新增规范的自查发现（2026-11-26）
+
+> **来源**：执行方在 `aeb5d8b` 把四条「架构规则」写进 `AGENTS.md`。**新增的规范本身就是
+> 一批「文档承诺」**，因此评审方按同一方法逐条回读代码核实。**四条里三条成立，一条的措辞
+> 与代码不符。**
+
+### G1 · 🆕 `AGENTS.md` 规则 2 的「only」与代码不符
+
+- **状态**：待办 · **成本**：约 10 分钟（改措辞） · **影响**：低中（可能诱导错误重构）
+- **规则原文**（`AGENTS.md` 架构规则 2）：
+
+  > **Avoid unnecessary `Arc`.** … In this tree `Arc` appears **only** where sharing is real:
+  > the cancel flag (`cancel.rs`), the per-source circuit breaker, and the optional memory store.
+
+- **实测（2026-11-26 评审方扫全树 `Arc<`）**：该断言里的「**only**」不成立。
+  除它列举的三项外，`Arc` 还出现在**至少四处**，而且**每一处都是真实共享**（规则的原则
+  没错，是**枚举不全**）：
+
+  | 位置 | 用途 | 是否真实共享 |
+  | --- | --- | --- |
+  | `rsagent-ai/src/provider.rs:133,155` | `Arc<HashMap<String, Arc<dyn Provider>>>`——模型注册表共享 provider | ✅ 是 |
+  | `sources/subprocess.rs:148` | `Arc<StdMutex<OutputBuffer>>`——两个排空任务与父级共享缓冲 | ✅ 是（**且必需**：`drain_into` 被 spawn 两次） |
+  | `agent.rs` | `HealthProbe = Arc<dyn Fn()…>`——共享健康探针闭包（D13） | ✅ 是 |
+  | `faux.rs` | 共享脚本化响应（测试替身） | ✅ 是 |
+- **为什么值得修（而非只是措辞）**：规则用了「**only**」并给出封闭清单，读者会据此认为
+  **清单之外出现 `Arc` 就是违规**。最可能被误伤的是 `subprocess.rs` 的
+  `Arc<StdMutex<OutputBuffer>>`——它看起来像「用 Arc 取悦借用检查器」，实际是
+  **两个 spawn 出来的排空任务与父级必须共享同一个缓冲**，去掉它无法编译或会丢失已读字节。
+  **一条把合法用法列为违规的规范，会诱发一次错误重构。**
+- **方案（二选一，推荐前者）**：
+  - **(a) 去掉封闭性**：把「appears **only** where sharing is real: [三项]」改为
+    「appears **where sharing is real** — the cancel flag, the per-source circuit breaker,
+    the optional memory store, the provider registry, the subprocess drain buffer, …」
+    即**列举改为示例**，并补上缺的四处（至少补 `subprocess.rs` 与 `provider.rs`）。
+  - **(b) 保留封闭清单**：那就必须**先真的把其余 `Arc` 去掉**——但 `subprocess.rs` 那处
+    **不能去**，故 (b) 不可行。
+- **验收**：`AGENTS.md` 规则 2 不再声称 `Arc` 只出现在三处；文中列举的每一处都能在代码里找到。
+- **关联**：A1 / A5 / D7 / D8 / D9 / E5 / E6 / E7 —— **同一类缺陷：文档承诺与代码不符。**
+  这是本项目里第一例**由新增规范自己引入**的此类问题。
+
+### 另外三条规则的核实结论（✅ 全部成立，无需改动）
+
+| 规则 | 核实方式 | 结论 |
+| --- | --- | --- |
+| **1 · Prefer newtypes** | 检查它引用的 `struct SessionId(String)` / `struct ToolName(String)` 是否存在 | ✅ **不构成缺陷**：原文写的是「**the shape being** …」，是**示意写法**而非引用现有类型。（两者确实不存在，但措辞已表明是形式示例。） |
+| **3 · Prefer channels over shared state** | 核对它引用的两处 | ✅ 成立：事件流是 `AgentEvent` 经 unbounded `mpsc`；CLI 输入是 `input.rs` 的句柄。 |
+| **4 · traits/enum，热循环免分配** | 核对它的**全部具体引用** | ✅ **全部存在**：`SourceMode::{Assemble, DeclaredOnly}`（`main.rs:815`，C1 刚加的）、`Permission`、`StopReason`、`Agent::run_turns`、四个 trait（`Tool`/`Provider`/`Approver`/`ToolSource`）。该条是**祈使句**（"avoid needless"），不是对现状的断言，故无可证伪之处。 |
 
 ---
 
