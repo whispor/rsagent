@@ -2055,7 +2055,7 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 
 ### F1 · 🆕 核心循环的四个公开行为**零测试覆盖**（**建议优先**）
 
-- **状态**：待办 · **成本**：约 1 天 · **影响**：**中高**（公开 API + 文档化行为 + 无任何验证）
+- **状态**：已完成 (0a4ed7b) · **成本**：约 1 天 · **影响**：**中高**（公开 API + 文档化行为 + 无任何验证）
 - **问题（2026-11-26 评审方实测计数）**：`Agent` 的文档注释写明了这些行为，源码里有实现，
   **但整个测试套件里一次都没出现**：
 
@@ -2092,9 +2092,31 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
   （例如把 `abort()` 调用去掉，测试必须红）。
 - **关联**：`docs/REVIEW.md` §11（功能正确性维度）、E3、D9、A1（同属「文档承诺无验证」）。
 
+```
+- 状态：已完成 (0a4ed7b)
+- 验收证据（四个测试全部 A/B 验证，去掉被测行为即变红）：
+  - steering_injects_a_message_mid_run
+    A/B：注释掉 run_turns 的 inject_steering() → FAILED（user_texts 只剩 ["start"]）
+  - follow_up_keeps_the_run_going
+    A/B：inject_follow_up() 前加 `false &&` → FAILED（只跑了 1 轮）
+  - aborting_a_run_ends_it_without_an_error
+    A/B：去掉 token.cancel() → FAILED（「the aborted turn must not produce a completed
+    assistant message」；未取消时 200 字 × 20ms 的流会跑完）
+  - a_sequential_tool_is_not_run_in_parallel_with_others
+    A/B：run_tool_calls 的 sequential 计算前加 `false &&` → FAILED（peak = 2）
+- 关于 steer 的「运行中」措辞：`steer` 取 `&mut self`，且**不像 abort 那样有可克隆的句柄**
+  （`abort` 经 `cancel_token()` 可从另一个 task 调用，steer 没有对应物），因此**公开 API
+  下无法在 run 进行中 steer**。测试据此改为：在 run 前入队、断言它作为 user 消息被注入且
+  与 prompt 不同（去掉 inject_steering 即红）。abort 测试则**确实**从另一个 task 取消（用
+  token），且等到该回合真正开始流式后才取消，故确定（连跑 5 次全绿）。
+- 无新依赖：用现有 harness + faux；自建 ProbeTool（is_sequential 探针）与 ConcurrencyProbe
+  （峰值并发计数）。
+- 门禁：fmt ✅ · clippy 0 警告 · agent_loop 31 → 35 · doc 0 告警。
+```
+
 ### F2 · 🆕 每回合两次**同步阻塞**读记忆文件（低影响，顺手可修）
 
-- **状态**：待办 · **成本**：约 0.5 天 · **影响**：低（内存占用与一致性，非正确性）
+- **状态**：已完成 (fe411cf) · **成本**：约 0.5 天 · **影响**：低（内存占用与一致性，非正确性）
 - **问题（2026-11-26 评审方实测）**：
   - `memory.rs:143` 用的是 **`std::fs::read_to_string`（同步阻塞）**，而项目其他文件操作
     一律用 `tokio::fs`——**与自身约定不一致**。
@@ -2114,6 +2136,27 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
   `Memory` 替身，或断言 `render` 的调用次数）。
 - **关联**：`docs/REVIEW.md` §11（性能效率维度）。**注意**：本条**不影响正确性**，
   E4 那次核实已确认压缩器不读 `Usage`，上下文预算计算是准确的。
+
+```
+- 状态：已完成 (fe411cf)，采用方案 (a)
+- 实现：在 run_turns 里 `system_prompt_with_memory()` **每回合只调一次**（紧接
+  inject_steering 之后、compact_context 之前），把渲染结果 `&str` 传入
+  `compact_context`（测预算用）与 `stream_turn` → `build_context`（发请求用）。
+  两个函数签名各加一个 `&str` 参数（**私有方法**，公开签名不变）。
+- 副作用（已写入文档与 CHANGELOG）：本回合压缩蒸馏出的笔记，现在对**下一回合**的请求可见，
+  而不再「回填」到本回合那条已经构建好的 prompt。这同时修好一个更细的一致性问题——
+  此前**被测量的 prompt 与真正发出的 prompt 相差一条笔记**；现在二者是同一条字符串。
+- 验收测试：a_turn_reads_memory_once（RecordingFaux 记录每个请求的 system prompt；
+  窗口 40、5 条 300 字种子、turn 1 触发压缩蒸馏）
+  - 断言「turn 1 的请求 prompt 含 seeded note」→ 记忆确实被折入
+  - 断言「turn 1 的请求 prompt **不含** [compacted]」→ 渲染发生在蒸馏之前 = 本回合只读一次
+  - 断言「turn 2 的请求 prompt 含 [compacted]」→ 下一回合重新渲染、看得到新笔记
+  - A/B：把 build_context 改回自己再渲染一次（旧的两次读）→ FAILED
+    （turn 1 的 prompt 立刻含 [compacted]）
+- 门禁：fmt ✅ · clippy 0 警告 · 全量 292 → 297（F1 四条 + F2 一条）· doc 0 告警。
+- 文档同步：agent.rs 的 system_prompt_with_memory / compact_context 文档注释、
+  CHANGELOG.md（Fixed）。
+```
 
 ---
 
