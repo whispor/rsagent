@@ -29,5 +29,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
   「Log the … round and its CI result」。
 - **五条北极星**：①最小化 ②贴合 pi 的形状 ③只有一种明显做法 ④无两个调用方不加抽象
   ⑤文档是改动的一部分。
+- **四条架构规则**（`AGENTS.md` §Architecture rules，2026-11-26 用户明确写入）：
+  ①优先 newtype（裸基本类型带独立语义时包一层）；②避免不必要的 `Arc`，靠数据结构设计
+  减少共享所有权（`Arc` 只在确有跨线程/生命周期共享处：cancel flag、每来源熔断器、
+  可选 memory）；③跨线程/任务传数据优先用 channel，而非锁保护共享单元（事件流、
+  `input.rs`）；④用 trait 与类型系统表达抽象（变体用 enum 不用 bool 标志），并避免在
+  高频循环（`Agent::run_turns`、逐工具执行）里做不必要的堆分配。
 - **lint**：禁 `#[allow]`（用 `#[expect(reason = "…")]`）；业务代码禁 `#[cfg]`
   （只在 `platform.rs`）。
