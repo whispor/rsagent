@@ -2210,7 +2210,7 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 
 ### G1 · 🆕 `AGENTS.md` 规则 2 的「only」与代码不符
 
-- **状态**：待办 · **成本**：约 10 分钟（改措辞） · **影响**：低中（可能诱导错误重构）
+- **状态**：已完成 (bb94eb4) · **成本**：约 10 分钟（改措辞） · **影响**：低中（可能诱导错误重构）
 - **规则原文**（`AGENTS.md` 架构规则 2）：
 
   > **Avoid unnecessary `Arc`.** … In this tree `Arc` appears **only** where sharing is real:
@@ -2241,6 +2241,22 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 - **验收**：`AGENTS.md` 规则 2 不再声称 `Arc` 只出现在三处；文中列举的每一处都能在代码里找到。
 - **关联**：A1 / A5 / D7 / D8 / D9 / E5 / E6 / E7 —— **同一类缺陷：文档承诺与代码不符。**
   这是本项目里第一例**由新增规范自己引入**的此类问题。
+
+```
+- 状态：已完成 (bb94eb4)，采用方案 (a)
+- 改动：AGENTS.md 规则 2 去掉封闭的「only … : [三项]」，改为「Where Arc does appear, the
+  sharing is real — for example …」，清单从三项扩为五项（补 provider registry 与
+  subprocess drain buffer），并以 "for example" 明确列举非穷尽。
+- 验收（逐处回读代码，全部命中）：
+  - cancel flag        → cancel.rs:13,14（flag/notify）
+  - circuit breaker    → sources/{local,mcp_http,mcp_stdio,skill,web}.rs 的 breaker 字段
+  - optional memory    → agent.rs:98、tool.rs:38（Option<Arc<Memory>>）
+  - provider registry  → provider.rs:133,155（Arc<HashMap<String, Arc<dyn Provider>>>）
+  - subprocess drain   → sources/subprocess.rs:148（Arc<StdMutex<OutputBuffer>>，drain_into
+    被 spawn 两次，与父级共享）
+- 实测：全树 Arc< 扫描（非测试）共 30+ 处，全部为真实共享；「only + 三项」确为枚举不全。
+- 门禁：改动仅 AGENTS.md（.md），fmt ✅ · clippy 0 警告 · 全量 297 通过 / 0 失败 · doc 0 告警。
+```
 
 ### 另外三条规则的核实结论（✅ 全部成立，无需改动）
 
