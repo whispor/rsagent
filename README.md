@@ -569,6 +569,8 @@ sees them without having to call `recall`; the store keeps the most recent 200 n
 drops older ones. A single note is capped at 2,000 characters, so one oversized note
 cannot crowd the prompt. When the transcript is compacted, the dropped turns are distilled
 into a single `[compacted]` note — what context management discards still survives on disk.
+The note is written **at most once every five turns** (a per-session counter), so the note
+itself cannot enlarge the next prompt in a soft "trim → note → trim" loop.
 
 Memory is a plain file you own: read, edit, or delete it with any tool. Appending writes a
 single line rather than rewriting the file, so two processes sharing one `--memory` file do
@@ -690,8 +692,9 @@ output and log files stay clean.
   model's context window (roughly three quarters of it is used, leaving room for the
   response). The first and most recent turns are always kept, so a tool call is never
   separated from its result; a `ContextCompacted` event reports how many messages were
-  dropped. With `--memory`, the dropped turns are also distilled into a memory note, so
-  nothing the trim removes is lost entirely.
+  dropped. With `--memory`, the dropped turns are also distilled into a memory note (at most
+  one every five turns, so the note cannot grow the next prompt in a soft loop), so nothing
+  the trim removes is lost entirely.
 - The `bash` tool is not sandboxed; approval prompts are the only guardrail.
 - **Same-process (WASM) plugin sandboxing is a non-goal.** Third-party code runs the same
   way the built-ins do — as a subprocess (`local`, `skill`, MCP) or an HTTP call (`web`) —

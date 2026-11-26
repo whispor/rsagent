@@ -121,6 +121,12 @@ pre-1.0, a **minor** bump may contain breaking changes and a **patch** bump may 
   breaker stayed closed and the source was never isolated during an outage. A 429 or 5xx now
   trips the breaker regardless of the body; a 4xx the request itself caused still reads as a
   business failure.
+- **Compaction distils to memory at most once every five turns.** Every context trim appended
+  a `[compacted]` note, and that note re-entered the next system prompt, enlarging the budget
+  it was meant to relieve — a soft "trim → note → trim" loop. A per-session turn counter now
+  suppresses the note for five turns after one is written; the first compaction of a session
+  still records, so nothing is silently lost from the start. Only the *frequency* changes —
+  the note's content and the memory store's contract are untouched.
 - **MCP replies are matched by direction, and `tools/list` pagination is bounded.** Both
   transports matched a response by `id` alone, but a server→client *request* also carries an
   `id`; a same-id request was taken as the answer and read as a silent empty success. A reply

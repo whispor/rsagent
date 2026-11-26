@@ -175,13 +175,16 @@ turns** are dropped — oldest first — while the first and most recent turns a
 kept. Turns are dropped whole so a tool call is never separated from its result. A
 `ContextCompacted` event reports how many messages went away. With `--memory`, the dropped
 turns are also distilled into a single `[compacted]` memory note, so what compaction
-removes is not lost for good — see §7.
+removes is not lost for good — see §7. The note is written at most once every five turns
+(a per-session counter), so the note cannot enlarge the next prompt in a soft
+"trim → note → trim" loop.
 
 每次请求前都会估算对话记录长度（粗略按 `字符数 / 4` 估算 token）；若超过模型上下文
 窗口的四分之三，就**按整轮丢弃最旧的回合**（从最旧开始），但始终保留第一轮与最近的
 回合。按整轮丢弃可确保工具调用与其结果永不被拆散。`ContextCompacted` 事件会报告
 丢弃了多少条消息。开启 `--memory` 时，被丢弃的回合还会蒸馏成一条 `[compacted]` 记忆
-笔记，裁剪掉的内容不会彻底消失——见 §7。
+笔记，裁剪掉的内容不会彻底消失——见 §7。该笔记**每 5 轮最多写一条**（每会话计数器），
+因此笔记本身不会以「裁剪 → 写笔记 → prompt 变大 → 再裁剪」的软回路撑大下一轮 prompt。
 
 ---
 

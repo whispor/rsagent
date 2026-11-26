@@ -363,7 +363,9 @@ MCP 的 `npx -y` 会在首次运行时自行拉包，所以"安装"对多数来�
   尾行丢弃"约定，不新造崩溃恢复逻辑。
 - **装配**：`Agent::with_memory(Arc<Memory>)` 把存储注入循环；循环在每个请求前把最近
   若干条笔记折进 system prompt（`system_prompt_with_memory`），并在压缩丢弃回合时
-  蒸馏出一条 `[compacted]` 笔记。同一存储也经 `ToolContext::with_memory` 到达工具。
+  蒸馏出一条 `[compacted]` 笔记（**每 5 轮最多一条**，避免笔记撑大下一轮 prompt 的软回路；
+  只加频率门，不改 `distill_messages` 的内容与 `Memory` 的存储约定）。同一存储也经
+  `ToolContext::with_memory` 到达工具。
 - **工具**：`memory_tools()` 返回 `remember` / `recall` 两个工具，**独立于
   `builtin_tools()`**，仅当 `--memory <FILE>` 时由 `BuiltinSource::with_memory()` 追加
   进装配结果——与 D2 一致：来源在装配期决定工具集，循环只见到扁平的工具列表。

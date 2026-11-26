@@ -1097,3 +1097,59 @@ async fn compaction_distills_dropped_turns_into_memory() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn compaction_notes_are_rate_limited_to_one_per_few_turns() {
+    let dir = temp_dir("memory-compact-rate");
+    let memory = Arc::new(Memory::new(dir.join("notes.jsonl"), 50));
+
+    let faux = FauxProvider::new();
+    // One text reply per prompt, so each prompt is a single turn.
+    faux.set_responses((0..6).map(|_| FauxResponse::text("ok")).collect());
+    let mut models = Models::new();
+    models.register(faux.clone());
+
+    // A tiny window with long turns, so every turn is over budget and compacts.
+    let model = faux.model().with_context_window(40);
+    let mut agent = Agent::new(models, model, "system").with_memory(Arc::clone(&memory));
+
+    let long = "x".repeat(300);
+    let transcript: Vec<Message> = (0..5).map(|_| Message::user(long.clone())).collect();
+    agent.load_messages(transcript);
+
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    agent.subscribe(tx);
+
+    // Six turns, each of which compacts once. Without the rate gate each would append a
+    // `[compacted]` note; with it, only the first of the six records.
+    for _ in 0..6 {
+        agent
+            .prompt(long.clone())
+            .await
+            .expect("a prompt completes");
+    }
+
+    let mut compactions = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, AgentEvent::ContextCompacted { .. }) {
+            compactions += 1;
+        }
+    }
+    let notes = memory
+        .recent(50)
+        .expect("read memory")
+        .iter()
+        .filter(|note| note.text.starts_with("[compacted]"))
+        .count();
+
+    assert!(
+        compactions >= 6,
+        "the test must exercise several compactions, saw {compactions}"
+    );
+    assert_eq!(
+        notes, 1,
+        "one distillation note per few turns, not one per compaction, saw {notes}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

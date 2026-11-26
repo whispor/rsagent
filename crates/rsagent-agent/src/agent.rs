@@ -29,6 +29,14 @@ use crate::tool::{PathFence, Tool, ToolContext};
 /// (decision D2, `docs/EXTENSIBILITY.md` §3.1).
 pub type HealthProbe = Arc<dyn Fn() -> Vec<UnhealthySource> + Send + Sync>;
 
+/// Turns a distillation note is suppressed for after one is written (decision C2).
+///
+/// Without this, every compaction appends a `[compacted]` note, and the note enlarges the
+/// next system prompt — a soft "trim → note → trim" loop. Suppressing the next
+/// `DISTILL_QUIET_TURNS` turns keeps the gist while breaking the loop; the first compaction
+/// of a session always records, so nothing is silently lost from the start.
+const DISTILL_QUIET_TURNS: usize = 5;
+
 /// A coding agent driven by an event loop.
 ///
 /// Subscribers receive [`AgentEvent`]s over an unbounded channel, which makes it easy to
@@ -102,6 +110,13 @@ pub struct Agent {
     health_probe: Option<HealthProbe>,
     /// Source ids already reported unhealthy, so a transition is announced once.
     reported_unhealthy: BTreeSet<String>,
+    /// The session turn number, bumped once per turn in `run_turns`. Per-session and not
+    /// persisted: a restart recounts from zero (decision C2).
+    turn: usize,
+    /// The turn of the last distillation note this session, if any (decision C2). A note is
+    /// suppressed for [`DISTILL_QUIET_TURNS`] turns after one, so the memory cannot grow the
+    /// next prompt in a soft loop.
+    last_distill_turn: Option<usize>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -128,6 +143,8 @@ impl std::fmt::Debug for Agent {
             .field("pending_tool_calls", &self.pending_tool_calls.len())
             .field("health_probe", &self.health_probe.is_some())
             .field("reported_unhealthy", &self.reported_unhealthy.len())
+            .field("turn", &self.turn)
+            .field("last_distill_turn", &self.last_distill_turn)
             .finish()
     }
 }
@@ -159,6 +176,8 @@ impl Agent {
             pending_tool_calls: Vec::new(),
             health_probe: None,
             reported_unhealthy: BTreeSet::new(),
+            turn: 0,
+            last_distill_turn: None,
         }
     }
 
@@ -389,6 +408,7 @@ impl Agent {
             if self.cancel.is_cancelled() {
                 return Ok(());
             }
+            self.turn = self.turn.saturating_add(1);
             self.inject_steering();
             self.compact_context();
             self.probe_health();
@@ -791,10 +811,20 @@ impl Agent {
     /// Best-effort: a memory write failure is ignored here, because the `remember` tool
     /// already reports memory errors to the model and a failed note must not abort a run.
     /// With no memory, or nothing worth keeping, this does nothing.
-    fn distill(&self, dropped: &[Message]) {
+    ///
+    /// Rate-limited (decision C2): a note is suppressed for [`DISTILL_QUIET_TURNS`] turns
+    /// after one, so a compaction cannot grow the next prompt in a soft loop. The first
+    /// compaction of a session always records.
+    fn distill(&mut self, dropped: &[Message]) {
         let Some(memory) = &self.memory else {
             return;
         };
+        if self
+            .last_distill_turn
+            .is_some_and(|last| self.turn.saturating_sub(last) <= DISTILL_QUIET_TURNS)
+        {
+            return;
+        }
         let digest = distill_messages(dropped);
         if digest.is_empty() {
             return;
@@ -804,6 +834,8 @@ impl Agent {
             dropped.len()
         );
         let _ = memory.append(&note);
+        // Only a written note starts the quiet window, so an empty digest does not.
+        self.last_distill_turn = Some(self.turn);
     }
 
     /// Poll the health probe and announce each source that has newly turned unhealthy.
