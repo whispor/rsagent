@@ -40,8 +40,10 @@ prescriptive: when a change can follow one, follow it.
 2. **Avoid unnecessary `Arc`.** Reach for shared ownership only when ownership genuinely
    crosses a thread or a lifetime. Prefer designing the data so a single owner is enough —
    pass `&T`, move the value, or split the struct — over wrapping it in `Arc` to quiet the
-   borrow checker. In this tree `Arc` appears only where sharing is real: the cancel flag
-   (`cancel.rs`), the per-source circuit breaker, and the optional memory store.
+   borrow checker. Where `Arc` does appear, the sharing is real — for example the cancel
+   flag (`cancel.rs`), the per-source circuit breaker, the optional memory store, the
+   provider registry (`provider.rs`), and the subprocess drain buffer
+   (`sources/subprocess.rs`, shared by two spawned tasks and the parent).
 
 3. **Prefer channels over shared state.** When data crosses a thread or task boundary, send
    it down a channel instead of guarding a shared cell with a lock. The event stream
