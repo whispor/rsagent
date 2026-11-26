@@ -640,7 +640,7 @@
 
 #### C1 · 信任边界：给项目配置加 opt-in
 
-- **状态**：**已决策 → 方案 (c)「只读命令不启动进程」**（2026-11-23，项目负责人）
+- **状态**：已完成 (d632905) · 采用方案 (c)「只读命令不启动进程」
 - **执行要点见 [§1.5 · 决策一](ACTIONS.md)**——含三个命令的具体行为调整、
   `tools doctor` 的「未检查」语义（**不计为问题**，否则会与 D4 的退出码逻辑打架）、
   以及「程序未被执行」的验收方式。
@@ -648,6 +648,32 @@
 - **问题**：`rsagent.toml` 可声明 `local` / `mcp-stdio` / `skill` 来源，它们在**装配期、
   任何审批之前**就被启动。`git clone && rsagent --list-tools` 会执行仓库声明的任意命令。
   README/STABILITY 已把这条写成警告，但**没有任何机制**阻止它。
+
+```
+- 状态：已完成 (d632905)，采用方案 (c)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 291 通过 / 0 失败（较上轮 289 → +2）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：read_only_commands_never_start_a_local_source、
+    read_only_mode_still_assembles_the_sources_that_start_nothing
+  - 重命名：a_config_driven_local_source_is_listed_but_not_started、
+    a_config_driven_mcp_stdio_source_is_listed_but_not_started
+  - 按新语义改写：an_unreachable_mcp_http_source_is_not_contacted_by_a_read_only_listing、
+    tools_doctor_fails_on_an_unloadable_source
+  - A/B 验证：把 --list-tools 的 SourceMode 临时改回 Assemble →
+    read_only_commands_never_start_a_local_source FAILED
+    （`rsagent --list-tools` must not run the local source's command）
+- 实现：SourceMode::{Assemble, DeclaredOnly}（二值 enum，非 bool）；DeclaredSource
+  只报 kind/id，tools() 为空、health() = NotChecked；build_source 在 DeclaredOnly 下
+  先校验必填字段再返回声明态；report() 对 NotChecked 隐藏工具数且不计为问题。
+- 文档同步：CHANGELOG.md（Security）、README.md（信任边界 / Managing tool sources）、
+  EXTENSIBILITY.md §3.6、`doctor` 帮助文本
+- 说明：D4 的退出码语义保留——doctor 仍对**配置错误**（缺 `command`/`url`、未知 kind）
+  退非零，只是不再探测 `local` / `mcp-*` 的可达性；相应测试已按新语义改写。
+```
+
 
 ---
 
