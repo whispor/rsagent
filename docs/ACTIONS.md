@@ -679,13 +679,33 @@
 
 #### C2 · 记忆蒸馏的限频
 
-- **状态**：**已决策 → 方案 (b)「每 5 轮最多一条」**（2026-11-23，项目负责人）
+- **状态**：已完成 (9ca215a) · 采用方案 (b)「每 5 轮最多一条」
 - **执行要点见 [§1.5 · 决策二](ACTIONS.md)**——含计数器位置、
   「不改 `distill_messages` 与 `Memory` 存储约定（D16）、只加频率门」的边界，
   以及「连续 6 次裁剪只多 1 条笔记」的验收方式。
 - **问题**：每次上下文裁剪都追加一条 `[compacted]` 笔记；该笔记下一轮进入 system prompt、
   **增大**预算占用，可能形成「裁剪 → 写笔记 → prompt 变大 → 再裁剪」的软回路。200 条上限
   能兜底，但回路本身仍在。
+
+```
+- 状态：已完成 (9ca215a)，采用方案 (b)
+- 验收证据：
+  - cargo fmt --all --check          → exit 0
+  - cargo clippy ... -D warnings     → 0 警告
+  - cargo test --workspace --locked  → 292 通过 / 0 失败（较 C1 的 291 → +1）
+  - cargo doc ...                    → 0 告警
+  - 新增测试：compaction_notes_are_rate_limited_to_one_per_few_turns
+    （窗口 40，5 条 300 字种子消息，连续 6 次 prompt 各触发一次裁剪 →
+     compactions >= 6 且 `[compacted]` 笔记恰为 1 条）
+  - A/B 验证：在 distill 的频率门前加 `if false &&` 临时禁用 →
+    该测试 FAILED（saw 6）；恢复后通过
+- 实现：agent.rs 新增常量 DISTILL_QUIET_TURNS = 5 与字段 turn / last_distill_turn；
+  run_turns 每轮 turn.saturating_add(1)；distill 改 &mut self，距上次写笔记 <= 5 轮则
+  直接返回；仅**实际写入**后才置 last_distill_turn（空 digest 不启动静默窗）。
+  未改 distill_messages 的内容/格式，未动 Memory 存储约定。
+- 文档同步：README（Memory 节 + --memory 说明）、ARCHITECTURE.md §6、EXTENSIBILITY.md §3.7、
+  CHANGELOG.md（Fixed）
+```
 
 ---
 
