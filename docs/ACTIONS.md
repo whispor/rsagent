@@ -51,7 +51,11 @@
 - **H1**：`91b8580`（`--cwd`/`--verbose` 的 E2E 覆盖，测试数 297 → **299**）。
 - **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1、G2、H1 全部完成——队列清空。**
 
-**综合评分 9.98 / 10**（G1 已修复并核实；G2 是低优先级措辞项，**不足以扣分**）。
+**综合评分 9.99 / 10**（G2 与 H1 均已修复并核实，**任务队列清空**。未给满分的原因见
+[REVIEW.md §2](REVIEW.md)：`docs/*.html` 两页不受门禁保护，且项目没有覆盖率度量）。
+
+> **评审方已独立复跑本表**（2026-11-27，`91b8580`）：fmt 干净 · clippy 0 警告 ·
+> **test 299 / 299** · doc 0 告警——**与执行方自报的数字一致**。
 
 **护栏复核**：无新增依赖声明、无 `#[allow]`、无业务代码平台 `#[cfg]`、无 `unsafe`/`TODO`、
 无无关重构。✅
@@ -853,13 +857,52 @@
 | 2026-11-24 | `0f6c562` | 289 | **9.99** | **E1–E7 + D5 已完成并核实**（8 项）：测试 279 → 289；**`audit` job 抓到并修掉 RUSTSEC-2026-0592**（`url` 栈溢出可 abort 进程）；E7 执行方有理有据地否定了评审方的推荐 |
 | 2026-11-26 | `fe411cf` | 297 | **9.98** | **C1+C2+F1+F2 已完成并核实**（4 项）：测试 289 → 297；**队列清空**；六维质量审核新增 §11；**新增规范自查发现 G1**（AGENTS.md 规则 2 的「only」与代码不符） |
 | 2026-11-26 | `fe411cf`（代码基线**未变**，仅 `AGENTS.md` 变） | 297（未重跑） | **9.98** | **G1 已修复并核实**（`bb94eb4`，采用方案 (a)，措辞与代码逐处对上）；**新增 G2**（规则 2 的普适断言仍有一处例外：`HealthProbe`）；**评审流程修正为双基线**（见 §5）——本轮正因旧基线看不见 `AGENTS.md` 才差点漏掉 G1 |
+| 2026-11-27 | `91b8580`（契约文档基线 `4912b27`） | **299** | **9.99** | **G2 + H1 已完成并核实**（`4912b27`/`91b8580`）：G2 删掉全称断言、只留例子（**未改代码**，建议被完整采纳）；H1 补上 `--cwd`/`--verbose` 的 E2E（+2 测试，各带对照）；**🎉 任务队列清空，无已知待办**；**双基线规则首次真正拦下东西**——G2 只改 `AGENTS.md`，旧口径会漏掉 |
 
-> **基线口径**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
+> **基线口径（双基线）**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
 > 查代码基线：`git log -1 --format=%h -- crates/ .github/ deny.toml`。
 > **不要只用 `crates/`**——D4 只改了 CI，旧口径会误判为「无代码改动」。
 > 评审文档自身的提交（`docs/REVIEW.md`、`docs/ACTIONS.md`）不计入。
+>
+> **契约文档基线**：`git log -1 --format=%h -- AGENTS.md README.md STABILITY.md CHANGELOG.md docs/EXTENSIBILITY.md docs/ARCHITECTURE.md`。
+> **为什么要两条**：本仓库价值最高的一类缺陷是「文档承诺与实际不符」（A1/A5/D7/D8/D9/E5/E6/E7），
+> **而这类缺陷的修复往往只改文档**——G1 与 G2 都只改了 `AGENTS.md`。
+> 只用代码基线，**G1 和 G2 都会被报成「无改动」而永远漏掉**（见 §3.13 与 §5）。
 
-### 本轮（`fe411cf` · 代码基线未变，仅 `AGENTS.md` 变动）复评记录
+### 本轮（`91b8580` · **双基线同时移动**）复评记录（2026-11-27）
+
+**这是双基线规则（§5）建立后第一次真正派上用场**：两个基线**同时**移动——
+**代码基线** `fe411cf` → **`91b8580`**（H1 的 E2E），
+**契约文档基线** `bb94eb4` → **`4912b27`**（G2 的措辞）。
+**若仍用旧口径，G2 那一半会被报成「无改动」而漏掉**——正是上一轮预言的失败模式。
+
+**四道门禁在 `91b8580` 上全量重跑**：fmt ✅ 干净 · clippy 0 警告 · **test 299 / 299** · doc 0 告警。
+
+**✅ G2 已修复并核实（`4912b27`）**：全称断言
+「Where `Arc` does appear, **the sharing is real** — for example …」**被整句删除**，
+改为「**`Arc` is used for** the cancel flag (`cancel.rs`), …, and the subprocess drain buffer」。
+**只留例子，没有任何关于「全树现状」的断言。** `git diff` 显示本轮**只动 `AGENTS.md`**，
+`agent.rs:30` 的 `HealthProbe` 原样保留 `Arc`——**「只改措辞、不改代码」的建议被完整采纳**
+（它是 Semver 公开 API，`STABILITY.md:46`）。详见 §8.6。
+
+**✅ H1 已修复并核实（`91b8580`）**：`crates/rsagent/tests/cli.rs` +64 行，新增两个 E2E，
+测试数 297 → **299**。评审方逐行回读，并**独立核验了「测试不可能空转通过」**：
+`--cwd` 测试的哨兵只写在 `<dir>/AGENTS.md`，而进程从 `cli.rs:13-20` 建的**空临时目录**
+`default_cwd()` 启动，**哨兵只可能来自 `--cwd`**；`--verbose` 测试**自带阴性控件**，
+且断言 stdout **恰好等于** `"(faux) you said: hi\n"`。详见 §8.7。
+
+**另核实 `docs/ARCHITECTURE.md` +8**（本次契约文档的第三处改动）：它新增一段指向
+`AGENTS.md` *Architecture rules* 的双语指针，其中英文写作「**`Arc` only where sharing is real**」。
+**这不是 G2 复发**——那是**规定**（「只在确有共享处用 `Arc`」），不是对**全树现状**的描述；
+**规定不会腐烂，快照才会**。其链接 `../AGENTS.md` 亦解析成功（`tests/docs.rs` 全绿）。
+
+**流程上的好消息**：执行方已把**双基线规则**写进自己的记录并主动引用（「见 §5 双基线」、
+「文档改动也能让测试变红，故不能一条都不跑」），并为 H1 两个测试**主动附了 A/B 证据**。
+**上一轮修正的流程缺陷，已经变成双方的共同实践。**
+
+---
+
+### 上一轮（`fe411cf` · 代码基线未变，仅 `AGENTS.md` 变动）复评记录
 
 **代码基线未变**（`fe411cf`），本轮的改动**只有 `AGENTS.md`**（`bb94eb4`）。按 §5 新增的
 **双基线**口径，这一轮做**文档复评**，**不重跑四道门禁**（`crates/` 未动，297 通过的结果仍成立），
@@ -2404,6 +2447,20 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 - 门禁：改动仅 AGENTS.md（.md），fmt ✅ · clippy 0 警告 · 全量 297 通过 / 0 失败 · doc 0 告警。
 ```
 
+**✅ 评审方核实（2026-11-27）**：`git diff bb94eb4..4912b27 -- AGENTS.md` 确认全称断言
+「Where `Arc` does appear, **the sharing is real** — for example …」**被整句删除**，改为
+「**`Arc` is used for** the cancel flag (`cancel.rs`), the per-source circuit breaker, the
+optional memory store, the provider registry (`provider.rs`), and the subprocess drain buffer
+(`sources/subprocess.rs`, shared by two spawned tasks and the parent)」——**只留例子，
+没有任何关于「全树现状」的断言**。同一 `git diff` 显示本轮**只动 `AGENTS.md`**，
+`agent.rs:30` 的 `HealthProbe` 原样保留 `Arc`——**「只改措辞、不改代码」的建议被完整采纳**
+（它是 Semver 公开 API，`STABILITY.md:46`，改成 `Box` 属破坏性变更，收益仅一次原子引用计数）。
+
+> **这次修复的形态本身就是答案**：G1 的毛病是**封闭清单**（「只在这三处」），
+> G1 的修法引入了**全称断言**（「每个 `Arc` 的共享都是真的」），而 G2 的修法
+> **既不是清单也不是断言，只是「`Arc` 用在这些地方」**——**陈述用法，不做保证**。
+> 陈述用法不会腐烂；清单和断言都会。
+
 ---
 
 ## 8.7 H 组 · 队列收尾（2026-11-27）
@@ -2439,6 +2496,20 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 - 无新依赖：复用现有 rsagent()/temp_dir() 与 `--faux` 离线 provider。
 - 门禁：fmt ✅ · clippy 0 警告 · 全量 297 → 299（+2）· doc 0 告警。
 ```
+
+**✅ 评审方核实（2026-11-27）**：两个测试逐行回读通过。**评审方不能改 `crates/`，故无法
+亲自复跑执行方声称的 A/B**，改为独立验证「**测试本身不可能空转通过**」：
+
+- `cwd_flag_selects_which_agents_md_is_read` —— 哨兵只写在 `<dir>/AGENTS.md`，而进程从
+  `default_cwd()` 启动；后者是 `cli.rs:13-20` 用 `OnceLock` 建的**空临时目录**
+  （`temp_dir()/rsagent-cli-cwd-<pid>`），其中没有 `AGENTS.md`。**哨兵只可能来自 `--cwd`。**
+  该测试另写自己的 `temp_dir("cwd-agents-md")`，**不污染**共享的 `default_cwd()`。
+- `verbose_adds_a_summary_to_stderr_without_touching_stdout` —— **自带阴性控件**（不加
+  `--verbose` 时 stderr 不含 `[verbose]`），且正面断言 stdout **恰好等于**
+  `"(faux) you said: hi\n"`（是「等于」，不是「包含」）。`[verbose]` 标记为真
+  （`main.rs:503`、`main.rs:914`、`render.rs:257/265/278`）。
+
+**评审方复跑四道门禁 @ `91b8580`：299 / 299 通过，0 失败——与自报一致。**
 
 ---
 
