@@ -348,15 +348,14 @@
               <span class="title">每个回合的开场：插队消息 + 裁剪上下文</span>
             </div>
             <div class="body">
-              <p><span class="fn">run_turns()</span> 每轮先做三件事：<span class="fn">probe_health()</span>
-                 探一次各来源的健康（熔断器刚跳闸的来源会在此被点名，见右侧 <code>SourceUnhealthy</code>）；
-                 <span class="fn">inject_steering()</span> 把排队的插队消息写进对话记录；
-                 <span class="fn">compact_context()</span> 若超出模型上下文预算
+              <p><span class="fn">run_turns()</span> 每轮先做三件事：<span class="fn">inject_steering()</span>
+                 把排队的插队消息写进对话记录；<span class="fn">compact_context()</span> 若超出模型上下文预算
                  （窗口的 3/4），就<b>按整回合</b>丢弃最旧的消息——首回合与最新回合永远保留，
-                 且工具调用不会与它的结果被拆散。</p>
+                 且工具调用不会与它的结果被拆散；<span class="fn">probe_health()</span>
+                 最后探一次各来源的健康（熔断器刚跳闸的来源会在此被点名，见右侧 <code>SourceUnhealthy</code>）。</p>
               <div class="events"><span class="lbl">发出</span>
-                <span class="chip">SourceUnhealthy</span><span class="chip">（仅在跳闸时）</span>
                 <span class="chip">ContextCompacted</span><span class="chip">（仅在裁剪时）</span>
+                <span class="chip">SourceUnhealthy</span><span class="chip">（仅在跳闸时）</span>
                 <span class="chip hot">TurnStart</span>
               </div>
             </div>
@@ -419,9 +418,10 @@
               <div class="events"><span class="lbl">发出</span>
                 <span class="chip hot">MessageEnd</span><span class="chip">TurnEnd</span>
               </div>
-              <div class="callout warn">模型级失败（缺密钥、网络）<b>不是</b> <code>Result::Err</code>：
-                它被记进 <code>last_error</code>，返回的仍是 <code>Ok(())</code>。
-                CLI 的 <code>--print</code> 会检查 <code>error_message()</code> 来决定退出码。</div>
+              <div class="callout warn">模型级失败（缺密钥、网络）<b>会</b>返回
+                 <code>Err(AgentError::ModelFailed)</code>——CLI 靠它退 <code>1</code>。
+                 而 <code>Aborted</code>（用户中断）才是那个「记入 <code>last_error</code>、
+                 返回 <code>Ok(())</code>」的分支，所以 README 说中断退 <code>0</code>。</div>
             </div>
           </div>
         </li>
