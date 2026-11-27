@@ -49,9 +49,9 @@
 - **G1**：`bb94eb4`（**只改 `AGENTS.md`**；代码基线未变，故该轮**未重跑门禁**——见 §5 双基线）。
 - **G2**：`4912b27`（**只改 `AGENTS.md`**，采用方案 (a)：删掉全称断言、只留例子）。
 - **H1**：`91b8580`（`--cwd`/`--verbose` 的 E2E 覆盖，测试数 297 → **299**）。
-- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1、G2、H1 全部完成——队列清空。**
-- **🆕 仍未完成：I1**（`docs/tool-call-journey.html` 两处与代码不符，**只改文档、不改代码**，
-  约 10 分钟）——2026-11-27 空闲核查发现，见 §8.8。
+- **I1**：`e0406bf`（**只改 `docs/tool-call-journey.html`**：第 6 步错误语义说反、第 3 步顺序
+  写反；**未改代码**）。
+- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1、G2、H1、I1 全部完成——队列清空。**
 
 **综合评分 9.99 / 10**（G2 与 H1 均已修复并核实，**代码队列清空**；I1 是纯文档措辞项，
 **不足以扣分**。未给满分的原因见 [REVIEW.md §2](REVIEW.md)：
@@ -2521,6 +2521,8 @@ optional memory store, the provider registry (`provider.rs`), and the subprocess
 
 ### I1 · `docs/tool-call-journey.html` 两处与代码不符（低优先级，但属「文档承诺 vs 实际」）
 
+- **状态**：已完成 (e0406bf)，采用方案「只改文档、不改代码」 · **成本**：约 10 分钟 · **影响**：低
+
 **背景**：评审方在空闲轮次沿「文档承诺 vs 实际」核查两个 HTML 图解页。
 `approval-and-fence.html` 的 24 格安全语义矩阵已于上一轮核实（**全对**，见 §9）。
 本轮核 `tool-call-journey.html`：**11 步里的 9 步**，以及 `3/4` 上下文预算、
@@ -2571,6 +2573,27 @@ optional memory store, the provider registry (`provider.rs`), and the subprocess
 **唯一剩余的结构性观察**（非待办）。此前它是**理论风险**（「符号可能随重命名过期」），
 **现在它已经真实发生了**——而且腐坏的不是标识符（那部分 2026-11-20 核过），
 是**散文里的语义**。这正是「没有回归保护」的定义。
+
+```
+- 状态：已完成 (e0406bf)，只改 docs/tool-call-journey.html，未改代码
+- 改动 1（第 6 步警告框，material）：改为「模型级失败会返回 Err(AgentError::ModelFailed)，
+  CLI 靠它退 1；Aborted（用户中断）才是那个『记入 last_error、返回 Ok(())』的分支，
+  所以 README 说中断退 0」。
+  依据：agent.rs:454-462（Error → return Err(ModelFailed)）、agent.rs:446-453
+  （Aborted → last_error = error_message; return Ok(())）；README.md 的退出码表
+  （模型失败 1 / 中断 0）。
+- 改动 2（第 3 步，minor）：三件事顺序改为 inject_steering() → compact_context() →
+  probe_health()。依据：agent.rs:411-419。
+- 改动 3（第 3 步 chips，执行方另发现，I1 未提）：把「发出」chips 由
+  SourceUnhealthy → ContextCompacted 改为 ContextCompacted → SourceUnhealthy。
+  依据：ContextCompacted 在 compact_context 内发射（agent.rs:808），SourceUnhealthy 在
+  probe_health 内发射（agent.rs:860），而调用顺序是 compact_context 先于 probe_health
+  ——故**可观察的事件顺序确会受影响**（I1 原文「顺序不受影响」此处不准确），chips 与
+  正文必须一致。
+- 未改代码：页面过期，代码与 README/STABILITY 一致（评审方建议 3，已采纳）。
+- 验收：`cargo test -p rsagent --test docs` → ✅ 2 passed / 0 failed（HTML 本身无门禁，
+  此项仅证明未破坏仓库 markdown/链接检查）。
+```
 
 ---
 
