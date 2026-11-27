@@ -567,6 +567,70 @@ fn the_system_flag_overrides_agents_md() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn cwd_flag_selects_which_agents_md_is_read() {
+    // `--cwd` sets the directory whose project files (`AGENTS.md`, `rsagent.toml`) are read,
+    // independent of the process working directory. The sentinel lives in `<dir>/AGENTS.md`,
+    // while the process runs from the empty default cwd, so only `--cwd` can supply it. The
+    // saved session carries the system prompt, which doubles as the observable.
+    let dir = temp_dir("cwd-agents-md");
+    std::fs::write(dir.join("AGENTS.md"), "CWD-SENTINEL-INSTRUCTIONS").expect("write AGENTS.md");
+    let session = dir.join("session.json");
+
+    let output = rsagent()
+        .args(["--faux", "--print", "hi", "--cwd"])
+        .arg(&dir)
+        .arg("--session")
+        .arg(&session)
+        .output()
+        .expect("run rsagent");
+
+    assert!(output.status.success(), "exit status: {:?}", output.status);
+    let saved = std::fs::read_to_string(&session).expect("read session");
+    assert!(
+        saved.contains("CWD-SENTINEL-INSTRUCTIONS"),
+        "`--cwd` must read AGENTS.md from the given directory: {saved}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn verbose_adds_a_summary_to_stderr_without_touching_stdout() {
+    // `--verbose` is a diagnostics switch: it adds a startup summary on stderr but must not
+    // change stdout, so `rsagent --print ... > answer.txt` stays a clean answer file.
+    let verbose = rsagent()
+        .args(["--faux", "--print", "hi", "--verbose"])
+        .output()
+        .expect("run rsagent");
+
+    assert!(
+        verbose.status.success(),
+        "exit status: {:?}",
+        verbose.status
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&verbose.stdout),
+        "(faux) you said: hi\n",
+        "--verbose must not change stdout"
+    );
+    let stderr = String::from_utf8_lossy(&verbose.stderr);
+    assert!(
+        stderr.contains("[verbose]"),
+        "--verbose must add a summary on stderr: {stderr:?}"
+    );
+
+    // The negative control: without the flag, that summary is absent.
+    let quiet = rsagent()
+        .args(["--faux", "--print", "hi"])
+        .output()
+        .expect("run rsagent");
+    assert!(
+        !String::from_utf8_lossy(&quiet.stderr).contains("[verbose]"),
+        "the summary must require --verbose"
+    );
+}
+
 /// A unique temporary directory for one test.
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("rsagent-cli-{name}-{}", std::process::id()));
