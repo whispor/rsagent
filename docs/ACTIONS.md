@@ -20,11 +20,12 @@
 | --- | --- |
 | `cargo fmt --all --check` | ✅ 干净 |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | ✅ 0 警告 |
-| `cargo test --workspace --locked` | ✅ **297 通过 / 0 失败**（@ `fe411cf`，工作区干净） |
+| `cargo test --workspace --locked` | ✅ **299 通过 / 0 失败**（@ `91b8580`，工作区干净） |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | ✅ 0 告警 |
 
-> **本表是 `fe411cf` 上的实测结果。** 2026-11-26 的 G1 修复（`bb94eb4`）**只改 `AGENTS.md`**，
-> 代码基线未动，故**未重跑四道门禁**——同一提交的结果仍然成立（§5 双基线）。
+> **本表在 `fe411cf` 上测得 297；2026-11-27 的 H1（`91b8580`）新增两个 E2E 测试，故重跑四道门禁，
+> 结果如上：299 通过 / 0 失败。** 2026-11-26 的 G1/G2（`bb94eb4`/`4912b27`）**只改 `AGENTS.md`**，
+> 代码基线未动，故那两轮**未重跑四道门禁**——同一提交的结果仍然成立（§5 双基线）。
 > **但按修正后的规则另跑了文档相关测试**：`cargo test --locked -p rsagent --test docs`
 > → ✅ **2 passed / 0 failed**（`every_relative_markdown_link_resolves`、
 > `the_public_api_table_matches_the_crate_roots`）。**文档改动也能让测试变红**，故不能一条都不跑。
@@ -45,10 +46,10 @@
 - **🆕 安全修复**：`24106d4` 把 `url` 2.5.8 → 2.5.9，修 RUSTSEC-2026-0592
   （见下方里程碑六）。
 - **C1 + C2 + F1 + F2**：`d632905`、`9ca215a`、`0a4ed7b`、`fe411cf`。测试数 289 → **297**。
-- **G1**：`bb94eb4`（**只改 `AGENTS.md`**；代码基线未变，故本轮**未重跑门禁**——见 §5 双基线）。
-- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1 全部完成——队列清空。**
-- **🆕 仍未完成**：**G2**（`AGENTS.md` 规则 2 的全称断言，约 10 分钟，**建议只改措辞不改代码**），
-  以及 `--cwd` / `--verbose` 的 E2E 覆盖。
+- **G1**：`bb94eb4`（**只改 `AGENTS.md`**；代码基线未变，故该轮**未重跑门禁**——见 §5 双基线）。
+- **G2**：`4912b27`（**只改 `AGENTS.md`**，采用方案 (a)：删掉全称断言、只留例子）。
+- **H1**：`91b8580`（`--cwd`/`--verbose` 的 E2E 覆盖，测试数 297 → **299**）。
+- **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1、G2、H1 全部完成——队列清空。**
 
 **综合评分 9.98 / 10**（G1 已修复并核实；G2 是低优先级措辞项，**不足以扣分**）。
 
@@ -2337,7 +2338,7 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
 
 ### G2 · 🆕 规则 2 的**普适断言**仍有一处例外：`HealthProbe`
 
-- **状态**：待决策（**评审方建议只改措辞、不改代码**） · **成本**：约 10 分钟 · **影响**：低
+- **状态**：已完成 (4912b27)，采用方案 (a)（**只改措辞、未改代码**） · **成本**：约 10 分钟 · **影响**：低
 - **背景**：G1 把「`Arc` 只出现在三处」改成了「Where `Arc` does appear, **the sharing is real**」。
   封闭清单的问题解决了，但**后半句从「枚举不全」升级成了一个全称命题**——
   它断言**全树的每一个 `Arc` 都对应真实共享**。
@@ -2390,6 +2391,54 @@ E7 管为什么当初没被发现。E5 可以在任何一次顺手的提交里�
   写「用 `Arc` 要有真实共享的理由」是规则；写「`Arc` 只出现在这三处」是快照。
   **前者永远不会错，后者一定会错。**
 - **验收**：`AGENTS.md` 规则 2 里不再有对**全树现状**的全称断言；五个例子仍逐处可查。
+
+```
+- 状态：已完成 (4912b27)，采用方案 (a)——只改措辞，未改代码
+- 改动：AGENTS.md 规则 2 删掉全称断言「Where Arc does appear, the sharing is real」，
+  改为纯列举「`Arc` is used for the cancel flag (cancel.rs), the per-source circuit breaker,
+  the optional memory store, the provider registry (provider.rs), and the subprocess drain
+  buffer (sources/subprocess.rs, shared by two spawned tasks and the parent).」
+  —— 没有断言，就没有可被证伪的东西；五个例子逐处仍可查。
+- 未改代码（评审方建议，已采纳）：HealthProbe 是 Semver 公开 API（STABILITY.md:46），
+  Arc→Box 属破坏性变更，收益仅「少一次原子引用计数增减」，不值得付一次 major。
+- 门禁：改动仅 AGENTS.md（.md），fmt ✅ · clippy 0 警告 · 全量 297 通过 / 0 失败 · doc 0 告警。
+```
+
+---
+
+## 8.7 H 组 · 队列收尾（2026-11-27）
+
+> **来源**：§10 路线图在 G1/G2 之后列出的**最后一项测试缺口**——
+> 「`--cwd` 与 `--verbose` 的 E2E 覆盖」（见 REVIEW.md §7「仍欠」、§10 路线图）。
+
+### H1 · `--cwd` 与 `--verbose` 的 E2E 覆盖
+
+- **状态**：已完成 (91b8580) · **成本**：约 0.5 天 · **影响**：中（两个用户可见的顶层 flag 此前零 E2E）
+- **问题**：`--cwd`（工作目录，决定读哪个 `AGENTS.md`/`rsagent.toml`、会话与熔断器基准）
+  与 `--verbose`（stderr 诊断摘要）是**顶层 CLI flag**，却**没有任何端到端测试**——
+  D1/D2 关闭审批与退出码的 E2E 缺口后，这是 REVIEW.md §7 记录的唯一剩余缺口。
+- **方案**：在 `crates/rsagent/tests/cli.rs` 加两个测试（用现有 `rsagent()` + `temp_dir()`，
+  无新依赖）：
+  1. `cwd_flag_selects_which_agents_md_is_read` —— `AGENTS.md` 哨兵放在 `<dir>`，
+     进程从**空的默认 cwd** 启动并传 `--cwd <dir>`；断言保存的会话 system prompt 含哨兵。
+  2. `verbose_adds_a_summary_to_stderr_without_touching_stdout` —— 正面：stdout 恒为
+     `(faux) you said: hi\n` 且 stderr 含 `[verbose]`；负面（反向对照）：不加 `--verbose`
+     时 stderr **不含** `[verbose]`。
+- **验收**：两个测试存在且能捕获对应回归——**各带 A/B**（见下）。
+- **关联**：REVIEW.md §7「仍欠」、§10 路线图；与 D1/D2 同属「用户可见契约的 E2E 覆盖」。
+
+```
+- 状态：已完成 (91b8580)
+- 验收证据（两个测试均 A/B 验证，去掉被测行为即变红）：
+  - cwd_flag_selects_which_agents_md_is_read
+    A/B：从测试里去掉 `--cwd <dir>`（改用空的进程 cwd）→ FAILED
+    （会话 system prompt 不含 CWD-SENTINEL-INSTRUCTIONS）
+  - verbose_adds_a_summary_to_stderr_without_touching_stdout
+    A/B：从正面运行里去掉 `--verbose` → FAILED（stderr 无 [verbose]）
+    负面控件：不加 --verbose 时 stderr 确不含 [verbose]（反向对照）
+- 无新依赖：复用现有 rsagent()/temp_dir() 与 `--faux` 离线 provider。
+- 门禁：fmt ✅ · clippy 0 警告 · 全量 297 → 299（+2）· doc 0 告警。
+```
 
 ---
 
