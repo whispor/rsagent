@@ -50,9 +50,12 @@
 - **G2**：`4912b27`（**只改 `AGENTS.md`**，采用方案 (a)：删掉全称断言、只留例子）。
 - **H1**：`91b8580`（`--cwd`/`--verbose` 的 E2E 覆盖，测试数 297 → **299**）。
 - **🎉 A 组 5/5、B 组 5/5、D 组 9/9、E 组 7/7、C1 + C2、F1 + F2、G1、G2、H1 全部完成——队列清空。**
+- **🆕 仍未完成：I1**（`docs/tool-call-journey.html` 两处与代码不符，**只改文档、不改代码**，
+  约 10 分钟）——2026-11-27 空闲核查发现，见 §8.8。
 
-**综合评分 9.99 / 10**（G2 与 H1 均已修复并核实，**任务队列清空**。未给满分的原因见
-[REVIEW.md §2](REVIEW.md)：`docs/*.html` 两页不受门禁保护，且项目没有覆盖率度量）。
+**综合评分 9.99 / 10**（G2 与 H1 均已修复并核实，**代码队列清空**；I1 是纯文档措辞项，
+**不足以扣分**。未给满分的原因见 [REVIEW.md §2](REVIEW.md)：
+`docs/*.html` 两页不受门禁保护——**而 I1 证明它们确实会漂移**——且项目没有覆盖率度量）。
 
 > **评审方已独立复跑本表**（2026-11-27，`91b8580`）：fmt 干净 · clippy 0 警告 ·
 > **test 299 / 299** · doc 0 告警——**与执行方自报的数字一致**。
@@ -858,6 +861,7 @@
 | 2026-11-26 | `fe411cf` | 297 | **9.98** | **C1+C2+F1+F2 已完成并核实**（4 项）：测试 289 → 297；**队列清空**；六维质量审核新增 §11；**新增规范自查发现 G1**（AGENTS.md 规则 2 的「only」与代码不符） |
 | 2026-11-26 | `fe411cf`（代码基线**未变**，仅 `AGENTS.md` 变） | 297（未重跑） | **9.98** | **G1 已修复并核实**（`bb94eb4`，采用方案 (a)，措辞与代码逐处对上）；**新增 G2**（规则 2 的普适断言仍有一处例外：`HealthProbe`）；**评审流程修正为双基线**（见 §5）——本轮正因旧基线看不见 `AGENTS.md` 才差点漏掉 G1 |
 | 2026-11-27 | `91b8580`（契约文档基线 `4912b27`） | **299** | **9.99** | **G2 + H1 已完成并核实**（`4912b27`/`91b8580`）：G2 删掉全称断言、只留例子（**未改代码**，建议被完整采纳）；H1 补上 `--cwd`/`--verbose` 的 E2E（+2 测试，各带对照）；**🎉 任务队列清空，无已知待办**；**双基线规则首次真正拦下东西**——G2 只改 `AGENTS.md`，旧口径会漏掉 |
+| 2026-11-27 | `91b8580`（空闲轮，**基线未变**） | 299（未重跑） | **9.99** | **空闲核查发现 I1**（见 §8.8）：`docs/tool-call-journey.html` 第 6 步把 `Error` 与 `Aborted` 的性质**说反**、第 3 步三件事顺序写错；同页其余 **9 步与全部数字/规则实测准确**（`3/4` 预算、`32_000` 截断、审批顺序、`is_sequential` 整批语义、7 个源码路径）。**「HTML 两页无门禁保护」由此从理论风险变成已发生事实。** |
 
 > **基线口径（双基线）**：这里记的是**最后一个改动 `crates/`、`.github/` 或 `deny.toml` 的提交**。
 > 查代码基线：`git log -1 --format=%h -- crates/ .github/ deny.toml`。
@@ -2513,6 +2517,63 @@ optional memory store, the provider registry (`provider.rs`), and the subprocess
 
 ---
 
+## 8.8 I 组 · 空闲核查发现（2026-11-27）
+
+### I1 · `docs/tool-call-journey.html` 两处与代码不符（低优先级，但属「文档承诺 vs 实际」）
+
+**背景**：评审方在空闲轮次沿「文档承诺 vs 实际」核查两个 HTML 图解页。
+`approval-and-fence.html` 的 24 格安全语义矩阵已于上一轮核实（**全对**，见 §9）。
+本轮核 `tool-call-journey.html`：**11 步里的 9 步**，以及 `3/4` 上下文预算、
+`32_000` 截断上限、「审批先于 start」、`is_sequential` 整批串行、`needs_prompt` 才发请求、
+7 个源码文件路径、示例名 `end_to_end`——**全部与代码一致**。但发现两处不符：
+
+**（1）第 6 步的警告框把错误语义说反了（material）**
+
+页面 `docs/tool-call-journey.html:422-424` 原文：
+
+> 模型级失败（缺密钥、网络）**不是** `Result::Err`：它被记进 `last_error`，返回的仍是 `Ok(())`。
+> CLI 的 `--print` 会检查 `error_message()` 来决定退出码。
+
+**实测：两句都不成立。**
+
+- `crates/rsagent-agent/src/agent.rs:454-462`：`StopReason::Error` 分支**明确返回 `Err`**——
+  `return Err(AgentError::ModelFailed { message });`。紧邻的源码注释（`agent.rs:444-445`）
+  写的是**相反**的话：「a model error is a failure the caller must see,
+  **so it is returned rather than swallowed**」。
+- `crates/rsagent/src/main.rs` **从不调用 `Agent::error_message()`**（对 `crates/rsagent/src`
+  全目录 grep：**0 命中**）。错误是从 `run_prompt`（`main.rs:1274` 的
+  `outcome.map_err(anyhow::Error::from)`）以 `anyhow::Error` 冒泡到 `main` 的。
+- 页面这句还**与项目自己的契约打架**：`README.md:589` 与 `docs/EXTENSIBILITY.md:451` 都写
+  「模型级失败 → 退出码 `1`」——**只有走 `Err` 路径才可能得到 1**。
+- `Agent::error_message()` 的真实消费者是**测试**（`tests/agent_loop.rs:186`、`:1279`），不是 CLI。
+
+**正确表述**：`Aborted` 才是「不是 `Result::Err`」的那一个——`agent.rs:446-453` 记入
+`last_error` 后 `return Ok(())`，这也正是 README 说「用户中断退 `0`」的原因。
+**页面把 `Aborted` 的性质安到了 `Error` 头上。**
+
+**（2）第 3 步的三件事顺序写反了（minor）**
+
+页面 `:351-356` 写「每轮先做三件事：`probe_health()`；`inject_steering()`；`compact_context()`」。
+`crates/rsagent-agent/src/agent.rs:411-420` 的真实顺序是
+**`inject_steering()` → `compact_context()` → `probe_health()`**（`TurnStart` 在三者之后）。
+三件事都会发生、`TurnStart` 仍在最后，故**可观察的事件顺序不受影响**；但列出的调用顺序是错的。
+（另注：`inject_steering` 排在 `compact_context` **之前**是有意义的——反过来，
+刚插队的消息可能立刻被裁掉。）
+
+**建议（给执行方）**：
+
+1. 把 `:422-424` 的警告框改成：模型级失败**会**返回 `Err(AgentError::ModelFailed)`，CLI 靠它退 `1`；
+   **`Aborted` 才是**那个「记入 `last_error`、返回 `Ok(())`」的分支（README 的 exit `0` 说的就是它）。
+2. 把 `:351-356` 三件事的顺序改为 `inject_steering()` → `compact_context()` → `probe_health()`。
+3. **不要**为了这两句文档去改代码——代码与 README/STABILITY 一致，**是页面过期了**。
+
+**这条发现的意义超出它本身**：评审方一直把「`docs/*.html` 两页不受任何门禁保护」列为
+**唯一剩余的结构性观察**（非待办）。此前它是**理论风险**（「符号可能随重命名过期」），
+**现在它已经真实发生了**——而且腐坏的不是标识符（那部分 2026-11-20 核过），
+是**散文里的语义**。这正是「没有回归保护」的定义。
+
+---
+
 ## 9. 已核实无需改动（评审方实测通过）
 
 > **用途**：记录评审方**实际验证过、结论是「没问题」**的项。这样未来的评审轮次不必重复
@@ -2539,6 +2600,7 @@ optional memory store, the provider registry (`provider.rs`), and the subprocess
 | README 的 CLI 选项清单与真实 `--help` 是否对得上 | 把 README 全部 40 个长选项与 `main.rs`（26 个 `#[arg`）+ `tools.rs`（11 个）的实际声明逐一比对（2026-11-27 06:00） | ✅ **无幽灵选项**：README 里 5 个「查无此选项」**全是误报**——`--call`/`--describe` 是 **`local` 工具程序自己的协议**（`README.md:259`、`:269`、`:356`），`--strict` 是 `rsagent.toml` 片段里**外部工具的固定参数**（`:345`），`--workspace`/`--example` 是 cargo 命令（`:57`、`:38`）。反向亦无遗漏：4 个未列出的真实选项（`--description`/`--method`/`--requires-approval`/`--timeout`）被 `README.md:439` 一句 **`Run rsagent tools add --help` for the per-kind fields** 明确**委托给 `--help`**。 |
 | README 的「Built-in tools」表（8 行 × 3 列）是否与代码一致 | 比对 `permission()` / `requires_approval()` 的实际返回值（2026-11-27 06:00） | ✅ **逐格准确**：类别列与 `permission()` 完全一致（`read_file`/`list_dir`/`search`/`glob` → `Read`，`webfetch` → `Network`，`write_file`/`edit_file` → `Write`，`bash` → `Exec`）；审批列「yes」的正好是四个，与 `requires_approval()` 的四处覆写（`tools.rs:241/305/660/778`）一一对应。**且类别列已被测试锁死**——`tools.rs:1146-1155` 有一张从 `builtin_tools()` 实时构建的**真值表**做断言，README 想漂移也漂不了。 |
 | `docs/approval-and-fence.html` 的「谁守哪段」**矩阵**与「围栏不是沙箱」论断（标识符本身已于 2026-11-20 核过，见上一行） | 逐格比对 8 工具 × 3 列 = 24 格 + 回读 `resolve_within` 实现与全部 6 处调用点（2026-11-27 06:00） | ✅ **24 格全对**：围栏列 ✓ 的恰是四个只读工具——`resolve_within` 的调用点**只有** `tools.rs:153`（read_file）/`:389`（list_dir）/`:464`（search）/`:571`（glob），而 `write_file`（`:253`）与 `edit_file`（`:322`）确实走 `context.resolve()`；顺序执行列 ✓ 的恰是 `is_sequential()` 覆写的 `write_file`/`edit_file`/`bash`。论断「没有围栏时直接返回 `resolve(path)`，有围栏才做 `canonicalize` + `starts_with` 两步，路径不存在明确报错」与 `tool.rs:116-139` **逐句吻合**。 |
+| `docs/tool-call-journey.html` 的 **11 步旅程**与其中的具体数字/规则 | 逐步回读 `agent.rs` 的 `prompt`/`run_loop`/`run_turns`/`stream_turn`/`run_tool_calls`/`check_approval`/`execute_one` + `provider.rs::Models::stream`（2026-11-27 14:00） | ✅ **绝大部分准确**：11 步里 **9 步全对**；`context_budget()` = `context_window / 4 * 3`（`agent.rs:872-877`）✓；`MAX_TOOL_RESULT_CHARS = 32_000`（`agent.rs:995`）✓；「审批先于 start」（`agent.rs:544-545` 注释 + `:550-556` 的顺序）✓；`is_sequential` 整批串行（`agent.rs:569-573`）✓；`needs_prompt` 才发 `ToolApprovalRequest`（`agent.rs:710-716`）✓；7 个源码文件全部存在 ✓；`Models::stream` 按 `model.provider` 路由 ✓。**但第 6 步的警告框与第 3 步的顺序不符 → 见 §8.8 的 I1。** |
 
 > **§2.4 核实的覆盖情况（2026-11-25 汇总）**：九条不变量中，
 > **1 / 2 / 3 / 7 / 8 已逐条实测**（见上表各行）；**5 / 6 由 `tool_conformance.rs` 覆盖，
@@ -2551,11 +2613,19 @@ optional memory store, the provider registry (`provider.rs`), and the subprocess
 评审方判断这**过于次要，不记为任务**——正文已确立该字段存在，读者可推知写法；
 为一个「示例可以更全」的观察单开一条会让清单失真。**此处记录以备查，不建议动手。**
 
-**一处值得注意的空白**：`docs/*.html` 两个图解页**不受任何门禁保护**——`tests/docs.rs`
-只检查 `.md` 的链接，`cargo doc` 只检查 Rust intra-doc 链接。**HTML 里的符号若随重命名
-过期，没有任何东西会报警**。评审方 2026-11-20 实测两份 HTML 仍然准确（见上表），
-**但这是一个将来可能悄悄漂移的点**。若将来 HTML 需要维护，可考虑把「HTML 中引用的
-`crate::` 符号必须存在」也纳入 `tests/docs.rs`；**当前不建议为此新增工作**，仅记录。
+**⚠️ 一处已从「空白」变成「已发生」的缺口（2026-11-27 更新）**：`docs/*.html` 两个图解页
+**不受任何门禁保护**——`tests/docs.rs` 只检查 `.md` 的链接，`cargo doc` 只检查 Rust
+intra-doc 链接。**HTML 里的符号若随重命名过期，没有任何东西会报警。**
+
+评审方 2026-11-20 核过两页的**标识符**（全对），2026-11-27 核过 `approval-and-fence.html`
+的**语义矩阵**（24 格全对）；但同一天核 `tool-call-journey.html` 时**真的发现了两处漂移**
+（见 §8.8 的 **I1**：第 6 步把 `Error` 与 `Aborted` 的性质说反了；第 3 步的三件事顺序写错）。
+**漂移的不是标识符，是散文里的语义**——而「检查符号是否存在」这类门禁**抓不到这种漂移**。
+
+**结论修正**：这不再是「将来可能悄悄漂移的点」，而是**已经漂移过、且没有任何机制会再发现它**的点。
+若要补，需要的是「**把 HTML 里的语义断言也变成测试**」（代价高、易脆），而不是「检查符号存在」。
+**评审方的建议仍是暂不为它新增工作**，但把它从「空白」升级为**已知风险**：
+**以后改 `agent.rs` 的错误路径或回合顺序时，记得有人要手改这两个 HTML。**
 
 **另一处措辞不精确（非缺陷，不建议改）**：`AGENTS.md` 写「Platform differences
 (**the only `#[cfg]` in the tree**)」，字面上不准确——`#[cfg(test)]` 遍布各文件，
